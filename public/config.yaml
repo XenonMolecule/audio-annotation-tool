@@ -10,6 +10,12 @@ tasks:
     choice_field: "PlayerNames"
     extra_choices:
       - "No werewolves"
+    combined_roles_fields:
+      - startRoles
+      - endRoles
+    default_roles:
+      - werewolf
+      - villager
 
   - id: "pronunciation"
     type: "pronunciation"
