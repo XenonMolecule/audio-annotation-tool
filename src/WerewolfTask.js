@@ -33,37 +33,24 @@ function WerewolfTask({ config, data, onUpdate }) {
   const currentRow = data[currentIndex];
   const rawTranscript = currentRow.transcript || '[Auto-generated transcript not available]';
 
-  // Combine roles: use fields from config and always include defaults.
-  const combineRoles = () => {
-    const fields = config.combined_roles_fields || ["startRoles", "endRoles"];
-    const defaults = config.default_roles || ["werewolf", "villager"];
-    let roles = new Set();
-    fields.forEach((field) => {
-      if (currentRow[field] && Array.isArray(currentRow[field])) {
-        currentRow[field].forEach((role) => roles.add(role.toLowerCase()));
-      }
-    });
-    defaults.forEach((role) => roles.add(role.toLowerCase()));
-    return Array.from(roles).sort((a, b) => a.localeCompare(b)).join(", ");
-  };
-
-  // Extract unique speaker tags from the raw transcript.
+  // Extract unique speaker tags using a regex that matches any text after "[SPEAKER_" until "]".
   const extractSpeakers = (transcript) => {
-    const regex = /\[SPEAKER_[0-9]+\]/g;
+    const regex = /\[SPEAKER_[^\]]+\]/g;
     const found = transcript.match(regex) || [];
     return Array.from(new Set(found)).sort((a, b) => a.localeCompare(b));
   };
 
   const uniqueSpeakers = extractSpeakers(rawTranscript);
 
-  // Format transcript: perform renaming then insert newlines.
+  // Format transcript: replace each speaker tag with its renamed version if available,
+  // then insert a newline before any tag not already preceded by one.
   const formatTranscript = (transcript) => {
-    const renameRegex = /\[SPEAKER_[0-9]+\]/g;
+    const renameRegex = /\[SPEAKER_[^\]]+\]/g;
     let renamed = transcript.replace(renameRegex, (match) => {
       const newName = speakerMap[match]?.trim();
       return newName && newName.length > 0 ? `[${newName}]` : match;
     });
-    // Insert newline before any bracketed tag not already preceded by a newline.
+    // Insert a newline before any bracketed tag not already preceded by a newline.
     renamed = renamed.replace(/(?<!\n)\s*(\[[^\]]+\])/g, "\n$1").trim();
     return renamed;
   };
@@ -111,7 +98,18 @@ function WerewolfTask({ config, data, onUpdate }) {
 
         {/* Combined roles display */}
         <p>
-          <strong>Roles:</strong> {combineRoles()}
+          <strong>Roles:</strong> {(() => {
+            const fields = config.combined_roles_fields || ["startRoles", "endRoles"];
+            const defaults = config.default_roles || ["werewolf", "villager"];
+            let roles = new Set();
+            fields.forEach((field) => {
+              if (currentRow[field] && Array.isArray(currentRow[field])) {
+                currentRow[field].forEach((role) => roles.add(role.toLowerCase()));
+              }
+            });
+            defaults.forEach((role) => roles.add(role.toLowerCase()));
+            return Array.from(roles).sort((a, b) => a.localeCompare(b)).join(", ");
+          })()}
         </p>
 
         {/* Transcript display */}
@@ -141,7 +139,7 @@ function WerewolfTask({ config, data, onUpdate }) {
           </div>
         )}
 
-        {/* Speaker renaming dropdown placed after transcript and audio, before voting */}
+        {/* Speaker renaming dropdown (after transcript and audio, before voting) */}
         <div className="mb-3">
           <Button variant="secondary" onClick={() => setShowSpeakerRename(!showSpeakerRename)}>
             {showSpeakerRename ? "Hide Speaker Rename" : "Show Speaker Rename"}
