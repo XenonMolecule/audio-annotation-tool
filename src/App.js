@@ -10,19 +10,22 @@ import EmotionTask from './EmotionTask';
 function App() {
   const [config, setConfig] = useState(null);
   const [datasets, setDatasets] = useState({});
-  // Annotations are stored as an object, keyed by task ID.
   const [annotations, setAnnotations] = useState({});
   const [activeTaskIndex, setActiveTaskIndex] = useState(0);
 
   // Load configuration and datasets.
   useEffect(() => {
-    fetch('/config.yaml')
+    fetch('/audio-annotation-tool/config.yaml')
       .then((res) => res.text())
       .then((text) => {
         const doc = yaml.load(text);
+        if (!doc || !doc.tasks) {
+          console.error("Error: config.yaml does not contain a 'tasks' array.");
+          return;
+        }
         setConfig(doc);
         doc.tasks.forEach((task) => {
-          fetch(task.data_file)
+          fetch('/audio-annotation-tool/' + task.data_file)
             .then((r) => r.text())
             .then((fileText) => {
               const lines = fileText.split('\n').filter((line) => line.trim() !== '');
@@ -35,7 +38,7 @@ function App() {
       .catch((err) => console.error('Error loading config.yaml:', err));
   }, []);
 
-  // Load existing annotations from localStorage on mount.
+  // Load existing annotations from localStorage.
   useEffect(() => {
     const saved = localStorage.getItem('annotations');
     if (saved) {
@@ -56,17 +59,13 @@ function App() {
   const handleAnnotationUpdate = (taskId, rowIndex, data) => {
     setAnnotations((prev) => {
       const taskAnnotations = prev[taskId] || {};
-      return { ...prev, [taskId]: { ...taskAnnotations, [rowIndex]: data } };
+      const updated = { ...prev, [taskId]: { ...taskAnnotations, [rowIndex]: data } };
+      localStorage.setItem('annotations', JSON.stringify(updated));
+      return updated;
     });
-    // Immediately update localStorage
-    const newAnnotations = {
-      ...annotations,
-      [taskId]: { ...(annotations[taskId] || {}), [rowIndex]: data },
-    };
-    localStorage.setItem('annotations', JSON.stringify(newAnnotations));
   };
 
-  // Export annotations directly from localStorage using a Blob.
+  // Export annotations using a Blob.
   const exportAnnotations = () => {
     const saved = localStorage.getItem('annotations') || '{}';
     const blob = new Blob([saved], { type: 'application/json' });
@@ -80,15 +79,19 @@ function App() {
     URL.revokeObjectURL(url);
   };
 
-  if (!config) {
+  if (!config || !config.tasks) {
     return (
       <Container className="mt-3">
         <h5>Loading configuration...</h5>
+        <p>Error: config.yaml does not contain a valid tasks array.</p>
       </Container>
     );
   }
 
-  const activeTask = config.tasks[activeTaskIndex];
+  // Ensure activeTaskIndex is within bounds.
+  const tasks = config.tasks;
+  const safeTaskIndex = activeTaskIndex < tasks.length ? activeTaskIndex : 0;
+  const activeTask = tasks[safeTaskIndex];
   const taskData = datasets[activeTask.id] || [];
 
   let TaskComponent = null;
@@ -114,10 +117,10 @@ function App() {
       <Navbar bg="dark" variant="dark" expand="lg" className="px-4">
         <Navbar.Brand>Audio Annotation Tool</Navbar.Brand>
         <Nav className="ml-auto">
-          {config.tasks.map((task, index) => (
+          {tasks.map((task, index) => (
             <Nav.Link
               key={task.id}
-              active={activeTaskIndex === index}
+              active={safeTaskIndex === index}
               onClick={() => setActiveTaskIndex(index)}
             >
               {task.id}
@@ -133,6 +136,7 @@ function App() {
           onUpdate={(rowIndex, rowData) =>
             handleAnnotationUpdate(activeTask.id, rowIndex, rowData)
           }
+          annotations={annotations[activeTask.id] || {}}
         />
         <div className="d-flex justify-content-end mt-3">
           <Button variant="primary" onClick={exportAnnotations}>
