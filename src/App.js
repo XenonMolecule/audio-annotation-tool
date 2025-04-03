@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { Container, Navbar, Nav, Button } from 'react-bootstrap';
+import { Container, Navbar, Nav, Button, Modal } from 'react-bootstrap';
 import yaml from 'js-yaml';
+import ReactMarkdown from 'react-markdown';
 
 import WerewolfTask from './WerewolfTask';
 import PronunciationTask from './PronunciationTask';
@@ -12,6 +13,7 @@ function App() {
   const [datasets, setDatasets] = useState({});
   const [annotations, setAnnotations] = useState({});
   const [activeTaskIndex, setActiveTaskIndex] = useState(0);
+  const [showInstructions, setShowInstructions] = useState(false);
 
   // Load configuration and datasets.
   useEffect(() => {
@@ -20,7 +22,7 @@ function App() {
       .then((text) => {
         const doc = yaml.load(text);
         if (!doc || !doc.tasks) {
-          console.error("Error: config.yaml does not contain a 'tasks' array.");
+          console.error("Error: config.yaml does not contain a valid 'tasks' array.");
           return;
         }
         setConfig(doc);
@@ -55,7 +57,7 @@ function App() {
     localStorage.setItem('annotations', JSON.stringify(annotations));
   }, [annotations]);
 
-  // Called by tasks to update the annotation for a specific row.
+  // Update annotations (called by tasks)
   const handleAnnotationUpdate = (taskId, rowIndex, data) => {
     setAnnotations((prev) => {
       const taskAnnotations = prev[taskId] || {};
@@ -130,6 +132,18 @@ function App() {
       </Navbar>
 
       <Container className="mt-4 mb-5" style={{ maxWidth: '900px' }}>
+        {/* Improved Instructions Button */}
+        <div className="d-flex justify-content-end mb-2">
+          <Button
+            variant="outline-secondary"
+            size="sm"
+            onClick={() => setShowInstructions(true)}
+            style={{ marginRight: '10px' }}
+          >
+            Instructions
+          </Button>
+        </div>
+
         <TaskComponent
           config={activeTask}
           data={taskData}
@@ -138,12 +152,32 @@ function App() {
           }
           annotations={annotations[activeTask.id] || {}}
         />
+
         <div className="d-flex justify-content-end mt-3">
           <Button variant="primary" onClick={exportAnnotations}>
             Export Annotations
           </Button>
         </div>
       </Container>
+
+      {/* Instructions Modal */}
+      <Modal show={showInstructions} onHide={() => setShowInstructions(false)} centered>
+        <Modal.Header closeButton>
+          <Modal.Title>Instructions for {activeTask.id}</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          {activeTask.instructions ? (
+            <ReactMarkdown>{activeTask.instructions}</ReactMarkdown>
+          ) : (
+            <p>No instructions available for this task.</p>
+          )}
+        </Modal.Body>
+        <Modal.Footer>
+          <Button variant="secondary" onClick={() => setShowInstructions(false)}>
+            Close
+          </Button>
+        </Modal.Footer>
+      </Modal>
     </>
   );
 }

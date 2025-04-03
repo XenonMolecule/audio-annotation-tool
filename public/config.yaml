@@ -3,6 +3,12 @@ tasks:
     type: "werewolf"
     description: "Annotate werewolf game audio"
     data_file: "data/werewolf.jsonl"
+    instructions: |
+      **Werewolf Instructions**
+      
+      1. Listen to the audio.
+      2. Rename speakers if needed.
+      3. Vote for the most likely werewolf.
     audio: true
     transcript: true
     display_fields:
