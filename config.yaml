@@ -22,6 +22,8 @@ tasks:
     default_roles:
       - werewolf
       - villager
+      - robber
+      - troublemaker
 
   - id: "pronunciation"
     type: "pronunciation"
