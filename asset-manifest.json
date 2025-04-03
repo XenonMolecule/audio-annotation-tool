@@ -1,0 +1,13 @@
+{
+  "files": {
+    "main.css": "/audio-annotation-tool/static/css/main.d221dc40.css",
+    "main.js": "/audio-annotation-tool/static/js/main.fe18fc92.js",
+    "index.html": "/audio-annotation-tool/index.html",
+    "main.d221dc40.css.map": "/audio-annotation-tool/static/css/main.d221dc40.css.map",
+    "main.fe18fc92.js.map": "/audio-annotation-tool/static/js/main.fe18fc92.js.map"
+  },
+  "entrypoints": [
+    "static/css/main.d221dc40.css",
+    "static/js/main.fe18fc92.js"
+  ]
+}
