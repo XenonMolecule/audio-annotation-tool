@@ -134,7 +134,7 @@ function WerewolfTask({ config, data, onUpdate }) {
         {/* Audio player */}
         {config.audio && currentRow.filename && (
           <div className="mb-3">
-            <audio controls style={{ width: '100%' }}>
+            <audio controls key={currentRow.filename} style={{ width: '100%' }}>
               <source src={`/audio-annotation-tool/data/audio/${currentRow.filename}`} type="audio/mp3" />
               Your browser does not support the audio element.
             </audio>
