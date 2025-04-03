@@ -1,0 +1,46 @@
+tasks:
+  - id: "werewolf"
+    type: "werewolf"
+    description: "Annotate werewolf game audio"
+    data_file: "data/werewolf.jsonl"
+    audio: true
+    transcript: true
+    display_fields:
+      - filename
+    choice_field: "PlayerNames"
+    extra_choices:
+      - "No werewolves"
+
+  - id: "pronunciation"
+    type: "pronunciation"
+    description: "Record your pronunciation from spelling"
+    data_file: "data/pronunciation.jsonl"
+    audio: true
+    recording: true
+    display_fields:
+      - filename
+      - word
+      - OED
+      - region
+
+  - id: "jeopardy"
+    type: "jeopardy"
+    description: "Buzz in and answer the Jeopardy question"
+    data_file: "data/jeopardy.jsonl"
+    audio: true
+    timing: true
+    display_fields:
+      - filename
+      - question
+    meta_fields:
+      - answer
+
+  - id: "emotion"
+    type: "emotion"
+    description: "Annotate speaker emotion"
+    data_file: "data/emotion.jsonl"
+    audio: true
+    display_fields:
+      - filename
+      - sentence
+    choice_field: "expected_emotions"
