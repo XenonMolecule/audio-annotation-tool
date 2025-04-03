@@ -4,7 +4,7 @@ from tqdm import tqdm
 import assemblyai as aai
 
 # Set your AssemblyAI API key here.
-aai.settings.api_key = "c6484914357146a7a4b2eace5c2f6801"
+aai.settings.api_key = "API_KEY_HERE"
 
 def process_audio(audio_path):
     """
