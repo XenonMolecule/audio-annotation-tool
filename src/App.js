@@ -134,25 +134,7 @@ function App() {
   return (
     <Router>
       <Routes>
-        <Route path="/audio-annotation-tool/:taskId" element={
-          <AppContent 
-            config={config}
-            datasets={datasets}
-            annotations={annotations}
-            setAnnotations={setAnnotations}
-            showInstructions={showInstructions}
-            setShowInstructions={setShowInstructions}
-            isSyncing={isSyncing}
-            setIsSyncing={setIsSyncing}
-            showToast={showToast}
-            setShowToast={setShowToast}
-            toastMessage={toastMessage}
-            setToastMessage={setToastMessage}
-            toastVariant={toastVariant}
-            setToastVariant={setToastVariant}
-          />
-        } />
-        <Route path="/audio-annotation-tool" element={
+        <Route path="/audio-annotation-tool/*" element={
           <AppContent 
             config={config}
             datasets={datasets}
@@ -191,19 +173,19 @@ function AppContent({
   toastVariant,
   setToastVariant
 }) {
-  const { taskId } = useParams();
   const navigate = useNavigate();
   const [activeTaskIndex, setActiveTaskIndex] = useState(0);
   const [isSingleTaskMode, setIsSingleTaskMode] = useState(false);
 
   // Handle all task and mode initialization
   useEffect(() => {
-    // Check for single-task mode
+    // Get query parameters
     const params = new URLSearchParams(window.location.search);
+    const taskId = params.get('task');
     const isOnlyMode = params.get('mode') === 'only';
     setIsSingleTaskMode(isOnlyMode);
 
-    // Find the correct task index based on URL
+    // Find the correct task index based on query parameter
     if (taskId) {
       const taskIndex = config.tasks.findIndex(task => task.id === taskId);
       if (taskIndex !== -1) {
@@ -213,10 +195,21 @@ function AppContent({
         setActiveTaskIndex(0);
       }
     } else {
-      // If no taskId in URL, default to first task
+      // If no taskId in query, default to first task
       setActiveTaskIndex(0);
     }
-  }, [taskId, config.tasks]);
+
+    // If we're on a path-based URL, redirect to query parameter version
+    const pathParts = window.location.pathname.split('/');
+    if (pathParts.length > 2) {
+      const pathTaskId = pathParts[2];
+      if (pathTaskId) {
+        const params = new URLSearchParams(window.location.search);
+        params.set('task', pathTaskId);
+        navigate(`/audio-annotation-tool?${params.toString()}`, { replace: true });
+      }
+    }
+  }, [config.tasks, navigate]);
 
   // Generate or retrieve user ID
   const generateUserId = () => {
@@ -331,7 +324,10 @@ function AppContent({
     }
     
     setActiveTaskIndex(index);
-    navigate(`/audio-annotation-tool/${taskId}`);
+    // Update URL with query parameter
+    const params = new URLSearchParams(window.location.search);
+    params.set('task', taskId);
+    navigate(`/audio-annotation-tool?${params.toString()}`);
   };
 
   // Handle annotation update
