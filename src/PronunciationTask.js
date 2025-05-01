@@ -6,6 +6,7 @@ import { storage } from './firebase';
 function PronunciationTask({ config, data, onUpdate, annotations, initialIndex = 0, onSync }) {
   const [currentIndex, setCurrentIndex] = useState(initialIndex);
   const [isRecording, setIsRecording] = useState(false);
+  const [isInitializing, setIsInitializing] = useState(false);
   const mediaRecorderRef = useRef(null);
   const streamRef = useRef(null);
   const chunksRef = useRef([]);
@@ -102,6 +103,7 @@ function PronunciationTask({ config, data, onUpdate, annotations, initialIndex =
     const rowIndex = currentIndex;
     const rowMetadata = metadata;
     try {
+      setIsInitializing(true);
       // If we're already recording, stop the current recording first
       if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
         mediaRecorderRef.current.stop();
@@ -114,75 +116,214 @@ function PronunciationTask({ config, data, onUpdate, annotations, initialIndex =
       // Store the stream in ref to prevent garbage collection
       streamRef.current = newStream;
       
-      // Configure MediaRecorder with proper mime type and options
-      const options = {
-        mimeType: 'audio/webm;codecs=opus',
-        audioBitsPerSecond: 128000
-      };
+      // Comprehensive browser detection
+      const userAgent = navigator.userAgent.toLowerCase();
+      const isSafari = /^((?!chrome|android).)*safari/i.test(userAgent) && 
+                      !userAgent.includes('chrome') &&
+                      !userAgent.includes('crios') &&
+                      !userAgent.includes('edg');
       
-      const recorder = new MediaRecorder(newStream, options);
-      chunksRef.current = [];
-      mediaRecorderRef.current = recorder;
-
-      recorder.ondataavailable = e => {
-        if (e.data.size > 0) {
-          chunksRef.current.push(e.data);
-        }
-      };
-
-      recorder.onstart = () => {
-        console.log('Recording started');
-      };
-
-      recorder.onstop = async () => {
-        console.log('Recording stopped');
-        const currentChunks = chunksRef.current;
-        if (currentChunks.length === 0) {
-          setToastMessage('No audio recorded');
-          setToastVariant('warning');
-          setShowToast(true);
-          setIsRecording(false);
-          return;
-        }
-        const blob = new Blob(currentChunks, { type: 'audio/webm' });
-        const tempUrl = URL.createObjectURL(blob);
-        setPlaybackUrl(tempUrl);
-        await uploadAudio(blob, rowIndex, rowMetadata);
-        // Only sync after upload is complete, but don't show another toast
-        if (onSync) {
-          try {
-            await onSync(true);
-          } catch (err) {
-            console.error('Sync error:', err);
-            setToastMessage('Error syncing to cloud');
-            setToastVariant('danger');
-            setShowToast(true);
+      console.log('Browser detection:', {
+        userAgent: navigator.userAgent,
+        isSafari: isSafari,
+        isEdge: userAgent.includes('edg'),
+        isFirefox: userAgent.includes('firefox'),
+        isChrome: userAgent.includes('chrome') && !userAgent.includes('edg')
+      });
+      
+      if (isSafari) {
+        console.log('Using Web Audio API for Safari');
+        // Use Web Audio API for Safari
+        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        const source = audioContext.createMediaStreamSource(newStream);
+        const processor = audioContext.createScriptProcessor(1024, 1, 1);
+        const chunks = [];
+        let hasValidAudio = false;
+        
+        processor.onaudioprocess = (e) => {
+          const inputData = e.inputBuffer.getChannelData(0);
+          // Check if we have actual audio data (not just silence)
+          const hasAudio = inputData.some(sample => Math.abs(sample) > 0.01);
+          if (hasAudio) {
+            hasValidAudio = true;
           }
+          chunks.push(new Float32Array(inputData));
+        };
+        
+        source.connect(processor);
+        processor.connect(audioContext.destination);
+        
+        // Store the audio context and processor
+        mediaRecorderRef.current = {
+          context: audioContext,
+          source: source,
+          processor: processor,
+          chunks: chunks,
+          hasValidAudio: hasValidAudio,
+          stop: () => {
+            processor.disconnect();
+            source.disconnect();
+            audioContext.close();
+            
+            if (!hasValidAudio) {
+              setToastMessage('No audio detected in recording');
+              setToastVariant('warning');
+              setShowToast(true);
+              setIsRecording(false);
+              return;
+            }
+            
+            // Convert Float32Array chunks to WAV
+            const wavBlob = convertToWav(chunks, audioContext.sampleRate);
+            const tempUrl = URL.createObjectURL(wavBlob);
+            setPlaybackUrl(tempUrl);
+            uploadAudio(wavBlob, rowIndex, rowMetadata);
+          }
+        };
+        
+        // Wait a bit longer to ensure recording is initialized
+        await new Promise(resolve => setTimeout(resolve, 500));
+        setIsInitializing(false);
+        setIsRecording(true);
+      } else {
+        // Use MediaRecorder for other browsers
+        const options = {
+          mimeType: 'audio/webm',
+          audioBitsPerSecond: 128000
+        };
+        
+        if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+          options.mimeType = 'audio/mp4';
         }
-      };
+        
+        console.log('Using MIME type:', options.mimeType);
+        
+        const recorder = new MediaRecorder(newStream, options);
+        chunksRef.current = [];
+        let hasValidAudio = false;
+        
+        // Request data chunks more frequently (every 50ms)
+        recorder.ondataavailable = e => {
+          console.log('Data available event:', e.data.size, 'bytes');
+          if (e.data.size > 0) {
+            chunksRef.current.push(e.data);
+            hasValidAudio = true;
+          } else {
+            console.warn('Received empty data chunk');
+          }
+        };
 
-      recorder.onerror = (e) => {
-        console.error('MediaRecorder error:', e);
-        setToastMessage('Recording error occurred');
-        setToastVariant('danger');
-        setShowToast(true);
-      };
+        recorder.onstart = () => {
+          console.log('Recording started');
+          // Start requesting data chunks immediately
+          recorder.requestData();
+        };
 
-      recorder.start();
-      setIsRecording(true);
+        recorder.onstop = async () => {
+          console.log('Recording stopped, chunks:', chunksRef.current.length);
+          const currentChunks = chunksRef.current;
+          if (currentChunks.length === 0 || !hasValidAudio) {
+            setToastMessage('No audio detected in recording');
+            setToastVariant('warning');
+            setShowToast(true);
+            setIsRecording(false);
+            return;
+          }
+          
+          const blob = new Blob(currentChunks, { type: options.mimeType });
+          const tempUrl = URL.createObjectURL(blob);
+          setPlaybackUrl(tempUrl);
+          await uploadAudio(blob, rowIndex, rowMetadata);
+        };
+
+        mediaRecorderRef.current = recorder;
+        
+        // Start recording and request data chunks every 50ms
+        recorder.start(50);
+        
+        // Wait a bit longer to ensure recording is initialized
+        await new Promise(resolve => setTimeout(resolve, 500));
+        setIsInitializing(false);
+        setIsRecording(true);
+      }
     } catch (err) {
       console.error('Error in startRecording:', err);
       setToastMessage('Cannot access microphone');
       setToastVariant('danger');
       setShowToast(true);
+      setIsInitializing(false);
+    }
+  };
+
+  // Helper function to convert Float32Array chunks to WAV
+  const convertToWav = (chunks, sampleRate) => {
+    const numChannels = 1;
+    const format = 1; // PCM
+    const bitDepth = 16;
+    
+    // Calculate total length
+    let totalLength = 0;
+    for (const chunk of chunks) {
+      totalLength += chunk.length;
+    }
+    
+    // Create WAV header
+    const header = new ArrayBuffer(44);
+    const view = new DataView(header);
+    
+    // RIFF chunk descriptor
+    writeString(view, 0, 'RIFF');
+    view.setUint32(4, 36 + totalLength * 2, true);
+    writeString(view, 8, 'WAVE');
+    
+    // fmt subchunk
+    writeString(view, 12, 'fmt ');
+    view.setUint32(16, 16, true);
+    view.setUint16(20, format, true);
+    view.setUint16(22, numChannels, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * numChannels * bitDepth / 8, true);
+    view.setUint16(32, numChannels * bitDepth / 8, true);
+    view.setUint16(34, bitDepth, true);
+    
+    // data subchunk
+    writeString(view, 36, 'data');
+    view.setUint32(40, totalLength * 2, true);
+    
+    // Combine header and data
+    const data = new Float32Array(totalLength);
+    let offset = 0;
+    for (const chunk of chunks) {
+      data.set(chunk, offset);
+      offset += chunk.length;
+    }
+    
+    const wav = new Int16Array(totalLength);
+    for (let i = 0; i < totalLength; i++) {
+      wav[i] = Math.max(-1, Math.min(1, data[i])) * 0x7FFF;
+    }
+    
+    const blob = new Blob([header, wav], { type: 'audio/wav' });
+    return blob;
+  };
+
+  const writeString = (view, offset, string) => {
+    for (let i = 0; i < string.length; i++) {
+      view.setUint8(offset + i, string.charCodeAt(i));
     }
   };
 
   const stopRecording = () => {
     console.log('stopRecording called', { isRecording, hasMediaRecorder: !!mediaRecorderRef.current });
-    if (mediaRecorderRef.current && isRecording) {
-      console.log('Stopping active recording');
-      mediaRecorderRef.current.stop();
+    if (mediaRecorderRef.current) {
+      if (mediaRecorderRef.current.stop) {
+        // For Safari Web Audio API
+        mediaRecorderRef.current.stop();
+      } else if (mediaRecorderRef.current.state === 'recording') {
+        // For MediaRecorder
+        mediaRecorderRef.current.requestData(); // Get final chunk
+        mediaRecorderRef.current.stop();
+      }
       setIsRecording(false);
     }
   };
@@ -315,13 +456,21 @@ function PronunciationTask({ config, data, onUpdate, annotations, initialIndex =
         {/* Recording controls */}
         {config.recording && (
           <div className="mb-3">
-            <Button
-              variant={isRecording ? 'danger' : 'primary'}
-              onClick={isRecording ? stopRecording : startRecording}
-              disabled={isUploading}
-            >
-              {isRecording ? 'Stop Recording' : (playbackUrl ? 'Re-record Audio' : 'Start Recording')}
-            </Button>
+            {isInitializing ? (
+              <Button variant="secondary" disabled style={{ minWidth: 160 }}>
+                <span className="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
+                Initializing…
+              </Button>
+            ) : (
+              <Button
+                variant={isRecording ? 'danger' : 'primary'}
+                onClick={isRecording ? stopRecording : startRecording}
+                disabled={isUploading}
+                style={{ minWidth: 160 }}
+              >
+                {isRecording ? 'Stop Recording' : (playbackUrl ? 'Re-record Audio' : 'Start Recording')}
+              </Button>
+            )}
 
             {isUploading && (
               <div className="mt-2">
