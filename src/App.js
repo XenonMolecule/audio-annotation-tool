@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Container, Navbar, Nav, Button, Modal, Toast, ToastContainer } from 'react-bootstrap';
-import { BrowserRouter as Router, Routes, Route, useParams, useNavigate } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, useNavigate } from 'react-router-dom';
 import yaml from 'js-yaml';
 import ReactMarkdown from 'react-markdown';
 import { ref, uploadString } from 'firebase/storage';
