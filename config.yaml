@@ -10,6 +10,7 @@ tasks:
       2. Rename speakers if needed.
       3. Vote for the most likely werewolf.
     audio: true
+    audio_path_prefix: "https://firebasestorage.googleapis.com/v0/b/hai-gcp-accents-dialects.appspot.com/o/audio%2Fwerewolf%2F"
     transcript: true
     display_fields:
       - filename
@@ -30,6 +31,7 @@ tasks:
     description: "Record your pronunciation from spelling"
     data_file: "data/pronunciation.jsonl"
     audio: true
+    audio_path_prefix: "https://firebasestorage.googleapis.com/v0/b/hai-gcp-accents-dialects.appspot.com/o/audio%2Fpronunciation%2F"
     recording: true
     display_fields:
       - filename
@@ -42,6 +44,7 @@ tasks:
     description: "Buzz in and answer the Jeopardy question"
     data_file: "data/jeopardy.jsonl"
     audio: true
+    audio_path_prefix: "https://firebasestorage.googleapis.com/v0/b/hai-gcp-accents-dialects.appspot.com/o/audio%2Fjeopardy%2F"
     timing: true
     display_fields:
       - filename
@@ -54,6 +57,7 @@ tasks:
     description: "Annotate speaker emotion"
     data_file: "data/emotion.jsonl"
     audio: true
+    audio_path_prefix: "https://firebasestorage.googleapis.com/v0/b/hai-gcp-accents-dialects.appspot.com/o/audio%2Femotion%2F"
     display_fields:
       - filename
       - sentence

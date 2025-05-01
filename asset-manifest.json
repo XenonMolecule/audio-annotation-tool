@@ -1,13 +1,13 @@
 {
   "files": {
     "main.css": "/audio-annotation-tool/static/css/main.79d19d76.css",
-    "main.js": "/audio-annotation-tool/static/js/main.34ce9c1e.js",
+    "main.js": "/audio-annotation-tool/static/js/main.93a8eeab.js",
     "index.html": "/audio-annotation-tool/index.html",
     "main.79d19d76.css.map": "/audio-annotation-tool/static/css/main.79d19d76.css.map",
-    "main.34ce9c1e.js.map": "/audio-annotation-tool/static/js/main.34ce9c1e.js.map"
+    "main.93a8eeab.js.map": "/audio-annotation-tool/static/js/main.93a8eeab.js.map"
   },
   "entrypoints": [
     "static/css/main.79d19d76.css",
-    "static/js/main.34ce9c1e.js"
+    "static/js/main.93a8eeab.js"
   ]
 }
