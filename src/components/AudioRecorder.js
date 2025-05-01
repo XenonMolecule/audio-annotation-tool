@@ -1,30 +1,22 @@
-import React, { useState, useRef, useImperativeHandle, forwardRef, useEffect } from 'react';
-import { Button, ProgressBar, ToastContainer, Toast, Alert } from 'react-bootstrap';
+import React, { useState, useRef, useImperativeHandle, forwardRef } from 'react';
+import { Button, Alert, ProgressBar } from 'react-bootstrap';
 import { getStorage, ref as storageRef, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
-import { storage } from '../firebase';
 
 const AudioRecorder = forwardRef(({ onRecordingComplete, allowReRecording = false, initialDelay = 0 }, ref) => {
   const [isRecording, setIsRecording] = useState(false);
-  const [isInitializing, setIsInitializing] = useState(false);
-  const [isUploading, setIsUploading] = useState(false);
-  const [playbackUrl, setPlaybackUrl] = useState(null);
-  const [showToast, setShowToast] = useState(false);
-  const [toastMessage, setToastMessage] = useState('');
-  const [toastVariant, setToastVariant] = useState('success');
-  const [uploadProgress, setUploadProgress] = useState(0);
-  const [reRecordingCount, setReRecordingCount] = useState(0);
-  const [originalRecordingUrl, setOriginalRecordingUrl] = useState(null);
+  const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState(null);
   const [recordingUrl, setRecordingUrl] = useState(null);
+  const [uploadProgress, setUploadProgress] = useState(0);
   const [showReRecord, setShowReRecord] = useState(false);
 
   const mediaRecorderRef = useRef(null);
-  const streamRef = useRef(null);
-  const chunksRef = useRef([]);
+  const audioChunksRef = useRef([]);
+  const audioStreamRef = useRef(null);
 
   useImperativeHandle(ref, () => ({
     startRecording: () => {
-      if (!isRecording && !isInitializing) {
+      if (!isRecording && !isProcessing) {
         startRecording();
       }
     },
@@ -85,14 +77,14 @@ const AudioRecorder = forwardRef(({ onRecordingComplete, allowReRecording = fals
 
   const startRecording = async () => {
     try {
-      setIsInitializing(true);
+      setIsProcessing(true);
       setError(null);
       if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
         mediaRecorderRef.current.stop();
         setIsRecording(false);
       }
       const newStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      streamRef.current = newStream;
+      audioStreamRef.current = newStream;
       // Browser detection
       const userAgent = navigator.userAgent.toLowerCase();
       const isSafari = /^((?!chrome|android).)*safari/i.test(userAgent) &&
@@ -140,7 +132,7 @@ const AudioRecorder = forwardRef(({ onRecordingComplete, allowReRecording = fals
           }
         };
         await new Promise(resolve => setTimeout(resolve, initialDelay));
-        setIsInitializing(false);
+        setIsProcessing(false);
         setIsRecording(true);
         console.log('Safari: Started recording');
       } else {
@@ -153,11 +145,11 @@ const AudioRecorder = forwardRef(({ onRecordingComplete, allowReRecording = fals
           options.mimeType = 'audio/mp4';
         }
         const recorder = new MediaRecorder(newStream, options);
-        chunksRef.current = [];
+        audioChunksRef.current = [];
         let hasValidAudio = false;
         recorder.ondataavailable = e => {
           if (e.data.size > 0) {
-            chunksRef.current.push(e.data);
+            audioChunksRef.current.push(e.data);
             hasValidAudio = true;
           }
         };
@@ -166,7 +158,7 @@ const AudioRecorder = forwardRef(({ onRecordingComplete, allowReRecording = fals
           console.log('MediaRecorder: Started recording');
         };
         recorder.onstop = async () => {
-          const currentChunks = chunksRef.current;
+          const currentChunks = audioChunksRef.current;
           console.log('MediaRecorder: Stopping recording. Chunks:', currentChunks.length);
           if (currentChunks.length === 0 || !hasValidAudio) {
             setError('No audio detected in recording');
@@ -181,12 +173,12 @@ const AudioRecorder = forwardRef(({ onRecordingComplete, allowReRecording = fals
         mediaRecorderRef.current = recorder;
         recorder.start(50);
         await new Promise(resolve => setTimeout(resolve, initialDelay));
-        setIsInitializing(false);
+        setIsProcessing(false);
         setIsRecording(true);
       }
     } catch (err) {
       setError('Cannot access microphone');
-      setIsInitializing(false);
+      setIsProcessing(false);
     }
   };
 
@@ -203,21 +195,20 @@ const AudioRecorder = forwardRef(({ onRecordingComplete, allowReRecording = fals
   };
 
   const resetRecording = () => {
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(track => track.stop());
+    if (audioStreamRef.current) {
+      audioStreamRef.current.getTracks().forEach(track => track.stop());
     }
     setRecordingUrl(null);
     setShowReRecord(false);
     setIsRecording(false);
-    setIsInitializing(false);
-    setIsUploading(false);
+    setIsProcessing(false);
     setUploadProgress(0);
     setError(null);
-    chunksRef.current = [];
+    audioChunksRef.current = [];
   };
 
   const uploadRecording = async (blob, mimeType) => {
-    setIsUploading(true);
+    setIsProcessing(true);
     setError(null);
     try {
       const userId = localStorage.getItem('annotationUserId') || (() => {
@@ -238,14 +229,13 @@ const AudioRecorder = forwardRef(({ onRecordingComplete, allowReRecording = fals
         err => {
           console.error('Upload error:', err);
           setError('Upload failed');
-          setIsUploading(false);
+          setIsProcessing(false);
         },
         async () => {
           try {
             const url = await getDownloadURL(task.snapshot.ref);
             setRecordingUrl(url);
             setShowReRecord(allowReRecording);
-            // Call onRecordingComplete with the URL after successful upload
             if (onRecordingComplete) {
               onRecordingComplete(url);
             }
@@ -253,14 +243,14 @@ const AudioRecorder = forwardRef(({ onRecordingComplete, allowReRecording = fals
             console.error('Error getting download URL:', err);
             setError('Error getting download URL');
           } finally {
-            setIsUploading(false);
+            setIsProcessing(false);
           }
         }
       );
     } catch (err) {
       console.error('Upload error:', err);
       setError('Upload failed');
-      setIsUploading(false);
+      setIsProcessing(false);
     }
   };
 
@@ -272,7 +262,7 @@ const AudioRecorder = forwardRef(({ onRecordingComplete, allowReRecording = fals
   return (
     <div>
       {error && <Alert variant="danger">{error}</Alert>}
-      {isInitializing ? (
+      {isProcessing ? (
         <Button variant="secondary" disabled>
           <span className="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
           Initializing...
@@ -296,7 +286,7 @@ const AudioRecorder = forwardRef(({ onRecordingComplete, allowReRecording = fals
           Start Recording
         </Button>
       )}
-      {isUploading && (
+      {isProcessing && (
         <div className="mt-2">
           <ProgressBar now={uploadProgress} label={`${Math.round(uploadProgress)}%`} />
         </div>

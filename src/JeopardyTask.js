@@ -1,5 +1,5 @@
 import React, { useState, useRef, useMemo, useEffect } from 'react';
-import { Card, Button, Alert, ProgressBar } from 'react-bootstrap';
+import { Card, Button, Alert } from 'react-bootstrap';
 import { ref, getDownloadURL } from 'firebase/storage';
 import { storage } from './firebase';
 import AudioRecorder from './components/AudioRecorder';
@@ -20,13 +20,58 @@ function JeopardyTask({ config, data, onUpdate, annotations, initialIndex = 0, o
   const [originalRecordingUrl, setOriginalRecordingUrl] = useState(null);
   const [isRecordingComplete, setIsRecordingComplete] = useState(false);
   const [audioLength, setAudioLength] = useState(null);
-  const [isRecording, setIsRecording] = useState(false);
   const [audioStarted, setAudioStarted] = useState(false);
+  const [showAudioRecorder, setShowAudioRecorder] = useState(false);
+  const [isAudioRecorderInitialized, setIsAudioRecorderInitialized] = useState(false);
   const [shouldAutoStartRecording, setShouldAutoStartRecording] = useState(false);
 
   const audioRef = useRef(null);
   const timerRef = useRef(null);
   const audioRecorderRef = useRef(null);
+
+  // Debug logging for component lifecycle
+  useEffect(() => {
+    console.log('JeopardyTask mounted/updated');
+    console.log('Current state:', {
+      isRecordingComplete,
+      hasReportedIssue,
+      buzzed,
+      reRecordingCount,
+      showAudioRecorder,
+      isAudioRecorderInitialized
+    });
+  }, [isRecordingComplete, hasReportedIssue, buzzed, reRecordingCount, showAudioRecorder, isAudioRecorderInitialized]);
+
+  // Separate effect to handle AudioRecorder mounting and initialization
+  useEffect(() => {
+    console.log('AudioRecorder mounting effect triggered');
+    console.log('Current conditions:', {
+      hasReportedIssue,
+      buzzed,
+      isRecordingComplete,
+      isAudioRecorderInitialized
+    });
+    
+    // Show AudioRecorder when we need it
+    if ((hasReportedIssue || buzzed) && !isRecordingComplete) {
+      console.log('Setting showAudioRecorder to true');
+      setShowAudioRecorder(true);
+      
+      // If we're showing the recorder but it's not initialized, force initialization
+      if (!isAudioRecorderInitialized) {
+        console.log('AudioRecorder not initialized, forcing initialization');
+        setIsAudioRecorderInitialized(true);
+        // Force a remount of the AudioRecorder
+        setShowAudioRecorder(false);
+        setTimeout(() => {
+          setShowAudioRecorder(true);
+        }, 0);
+      }
+    } else {
+      console.log('Setting showAudioRecorder to false');
+      setShowAudioRecorder(false);
+    }
+  }, [hasReportedIssue, buzzed, isRecordingComplete, isAudioRecorderInitialized]);
 
   // Compute currentRow using useMemo
   const currentRow = useMemo(() => {
@@ -117,13 +162,6 @@ function JeopardyTask({ config, data, onUpdate, annotations, initialIndex = 0, o
     setAudioLength(e.target.duration * 1000); // Convert to milliseconds
   };
 
-  const startRecording = () => {
-    if (audioRecorderRef.current) {
-      audioRecorderRef.current.startRecording();
-      setIsRecording(true);
-    }
-  };
-
   const handleBuzzIn = () => {
     if (!audioStarted) return;
     const now = Date.now();
@@ -145,16 +183,42 @@ function JeopardyTask({ config, data, onUpdate, annotations, initialIndex = 0, o
     }
   }, [buzzed, shouldAutoStartRecording]);
 
+  const handleReportIssue = () => {
+    console.log('handleReportIssue called');
+    console.log('Current audioRecorderRef:', audioRecorderRef.current);
+    setHasReportedIssue(true);
+    setOriginalRecordingUrl(currentAnnotation.recording);
+    setReRecordingCount(reRecordingCount + 1);
+    setIsRecordingComplete(false);
+    setBuzzed(true);
+    setIsAudioRecorderInitialized(false);
+    setShowAudioRecorder(true);
+    
+    if (audioRecorderRef.current) {
+      console.log('Resetting recorder');
+      audioRecorderRef.current.resetRecording();
+    } else {
+      console.log('No audioRecorderRef available');
+    }
+  };
+
   const handleRecordingComplete = async (recordingUrl) => {
     console.log('handleRecordingComplete called with URL:', recordingUrl);
+    console.log('Current state:', {
+      buzzTime,
+      buzzLatency,
+      reRecordingCount,
+      originalRecordingUrl
+    });
+    
     const updatedAnnotation = {
       buzzTime,
       buzzLatency,
       recording: recordingUrl,
       originalRecording: originalRecordingUrl || recordingUrl,
-      reRecordingCount,
+      reRecordingCount: hasReportedIssue ? (currentAnnotation.reRecordingCount || 0) + 1 : 0,
       audioLength,
-      answer: "recorded", // Temporary state until user clicks Next
+      answer: "recorded",
       metadata: {
         ...metadata,
         timestamp: Date.now()
@@ -169,19 +233,9 @@ function JeopardyTask({ config, data, onUpdate, annotations, initialIndex = 0, o
     if (onSync) await onSync();
   };
 
-  const handleReportIssue = () => {
-    setHasReportedIssue(true);
-    setOriginalRecordingUrl(currentAnnotation.recording);
-    setReRecordingCount(reRecordingCount + 1);
-    setIsRecordingComplete(false);
-    if (audioRecorderRef.current) {
-      audioRecorderRef.current.resetRecording();
-      audioRecorderRef.current.startRecording();
-    }
-  };
-
-  // Refresh local state when moving to a new row or annotation changes
+  // Refresh local state when moving to a new row or when annotations change
   useEffect(() => {
+    console.log('Current annotation changed:', currentAnnotation);
     setReRecordingCount(currentAnnotation.reRecordingCount || 0);
     setOriginalRecordingUrl(currentAnnotation.originalRecording || null);
     setIsRecordingComplete(!!currentAnnotation.recording);
@@ -358,12 +412,12 @@ function JeopardyTask({ config, data, onUpdate, annotations, initialIndex = 0, o
             <div className="mb-3">
               <div className="mb-2 text-center text-muted">Your Recording</div>
               <audio controls src={currentAnnotation.recording} style={{ width: '100%' }} />
-              {reRecordingCount > 0 && (
+              {currentAnnotation.reRecordingCount > 0 && !hasReportedIssue && (
                 <div className="mt-2 text-center text-muted">
-                  Re-recorded {reRecordingCount} time{reRecordingCount > 1 ? 's' : ''}
+                  Re-recorded {currentAnnotation.reRecordingCount} time{(currentAnnotation.reRecordingCount) !== 1 ? 's' : ''}
                 </div>
               )}
-              {!hasReportedIssue && (
+              {!hasReportedIssue ? (
                 <div className="mt-3">
                   <Button
                     variant="outline-warning"
@@ -372,6 +426,15 @@ function JeopardyTask({ config, data, onUpdate, annotations, initialIndex = 0, o
                   >
                     Report Audio Issue
                   </Button>
+                </div>
+              ) : (
+                <div className="mt-3">
+                  <AudioRecorder
+                    ref={audioRecorderRef}
+                    onRecordingComplete={handleRecordingComplete}
+                    allowReRecording={true}
+                    initialDelay={500}
+                  />
                 </div>
               )}
             </div>
@@ -391,14 +454,9 @@ function JeopardyTask({ config, data, onUpdate, annotations, initialIndex = 0, o
               <AudioRecorder
                 ref={audioRecorderRef}
                 onRecordingComplete={handleRecordingComplete}
-                allowReRecording={false}
+                allowReRecording={true}
                 initialDelay={500}
               />
-              {reRecordingCount > 0 && (
-                <div className="mt-2 text-center text-muted">
-                  Re-recorded {reRecordingCount} time{reRecordingCount > 1 ? 's' : ''}
-                </div>
-              )}
             </div>
           )}
         </div>
