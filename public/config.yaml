@@ -41,14 +41,23 @@ tasks:
 
   - id: "jeopardy"
     type: "jeopardy"
-    description: "Buzz in and answer the Jeopardy question"
+    description: "Click play to hear the question, then buzz in when you know the answer (or make your best guess)"
     data_file: "data/jeopardy.jsonl"
+    instructions: |
+      **Jeopardy Instructions**
+      
+      1. Click play to listen to the question audio
+      2. When you know the answer, click the "Buzz In!" button
+      3. Your answer will be recorded automatically
+      4. You can play back your recording
+      5. If you experience audio issues, you can report them and re-record
+      6. Your answer will be submitted automatically after recording
+      7. If you don't know the answer, still buzz in and say "I don't know" or "I'm not sure" or make your best guess to move on
     audio: true
     audio_path_prefix: "https://firebasestorage.googleapis.com/v0/b/hai-gcp-accents-dialects.appspot.com/o/audio%2Fjeopardy%2F"
     timing: true
     display_fields:
       - filename
-      - question
     meta_fields:
       - answer
 

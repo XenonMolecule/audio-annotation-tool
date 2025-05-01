@@ -1,19 +1,32 @@
 import React, { useState, useRef, useMemo, useEffect } from 'react';
-import { Card, Button, Form, Alert } from 'react-bootstrap';
+import { Card, Button, Alert, ProgressBar } from 'react-bootstrap';
 import { ref, getDownloadURL } from 'firebase/storage';
 import { storage } from './firebase';
+import AudioRecorder from './components/AudioRecorder';
 
 function JeopardyTask({ config, data, onUpdate, annotations, initialIndex = 0, onSync }) {
   const [currentIndex, setCurrentIndex] = useState(initialIndex);
   const [buzzLatency, setBuzzLatency] = useState(null);
   const [questionStartTime, setQuestionStartTime] = useState(null);
   const [buzzed, setBuzzed] = useState(false);
-  const audioRef = useRef(null);
-  const [answer, setAnswer] = useState('');
   const [buzzTime, setBuzzTime] = useState(null);
   const [audioUrl, setAudioUrl] = useState(null);
   const [audioError, setAudioError] = useState(null);
   const [isLoadingAudio, setIsLoadingAudio] = useState(false);
+  const [timer, setTimer] = useState(0);
+  const [isTimerRunning, setIsTimerRunning] = useState(false);
+  const [hasReportedIssue, setHasReportedIssue] = useState(false);
+  const [reRecordingCount, setReRecordingCount] = useState(0);
+  const [originalRecordingUrl, setOriginalRecordingUrl] = useState(null);
+  const [isRecordingComplete, setIsRecordingComplete] = useState(false);
+  const [audioLength, setAudioLength] = useState(null);
+  const [isRecording, setIsRecording] = useState(false);
+  const [audioStarted, setAudioStarted] = useState(false);
+  const [shouldAutoStartRecording, setShouldAutoStartRecording] = useState(false);
+
+  const audioRef = useRef(null);
+  const timerRef = useRef(null);
+  const audioRecorderRef = useRef(null);
 
   // Compute currentRow using useMemo
   const currentRow = useMemo(() => {
@@ -26,10 +39,13 @@ function JeopardyTask({ config, data, onUpdate, annotations, initialIndex = 0, o
     const annotation = annotations[currentIndex];
     if (annotation) return annotation;
     
-    // If nothing found, return empty annotation with metadata
     return {
-      answer: '',
       buzzTime: null,
+      buzzLatency: null,
+      recording: null,
+      originalRecording: null,
+      reRecordingCount: 0,
+      audioLength: null,
       metadata: {
         timestamp: Date.now()
       }
@@ -71,30 +87,72 @@ function JeopardyTask({ config, data, onUpdate, annotations, initialIndex = 0, o
     loadAudioUrl();
   }, [config, currentRow]);
 
-  if (!currentRow) {
-    return <h5>Loading task data...</h5>;
-  }
+  // Timer effect
+  useEffect(() => {
+    if (isTimerRunning) {
+      timerRef.current = setInterval(() => {
+        setTimer(prev => prev + 100);
+      }, 100);
+    } else {
+      clearInterval(timerRef.current);
+    }
+    return () => clearInterval(timerRef.current);
+  }, [isTimerRunning]);
+
+  const handleAudioPlay = () => {
+    if (!questionStartTime) {
+      setQuestionStartTime(Date.now());
+      setIsTimerRunning(true);
+    }
+    setAudioStarted(true);
+  };
+
+  const handleAudioPause = () => {
+    if (buzzed) {
+      setIsTimerRunning(false);
+    }
+  };
+
+  const handleAudioLoadedMetadata = (e) => {
+    setAudioLength(e.target.duration * 1000); // Convert to milliseconds
+  };
+
+  const startRecording = () => {
+    if (audioRecorderRef.current) {
+      audioRecorderRef.current.startRecording();
+      setIsRecording(true);
+    }
+  };
 
   const handleBuzzIn = () => {
-    if (!questionStartTime) return;
+    if (!audioStarted) return;
     const now = Date.now();
     const latency = now - questionStartTime;
     setBuzzLatency(latency);
     setBuzzed(true);
     setBuzzTime(now);
-    onUpdate(currentIndex, { buzzLatency: latency, buzzTime: now });
+    setIsTimerRunning(false);
     if (audioRef.current) {
       audioRef.current.pause();
     }
+    setShouldAutoStartRecording(true);
   };
 
-  const handleAnswerSubmit = async () => {
-    if (!answer.trim()) return;
-    
+  useEffect(() => {
+    if (buzzed && shouldAutoStartRecording && audioRecorderRef.current) {
+      audioRecorderRef.current.startRecording();
+      setShouldAutoStartRecording(false);
+    }
+  }, [buzzed, shouldAutoStartRecording]);
+
+  const handleRecordingComplete = async (recordingUrl) => {
     const updatedAnnotation = {
-      answer,
       buzzTime,
       buzzLatency,
+      recording: recordingUrl,
+      originalRecording: originalRecordingUrl || recordingUrl,
+      reRecordingCount,
+      audioLength,
       metadata: {
         ...metadata,
         timestamp: Date.now()
@@ -103,13 +161,16 @@ function JeopardyTask({ config, data, onUpdate, annotations, initialIndex = 0, o
     
     await onUpdate(currentIndex, updatedAnnotation);
     if (onSync) await onSync();
-    
-    // Reset state for next question
-    setAnswer('');
-    setBuzzed(false);
-    setBuzzLatency(null);
-    setQuestionStartTime(null);
-    setBuzzTime(null);
+    setIsRecordingComplete(true);
+  };
+
+  const handleReportIssue = () => {
+    setHasReportedIssue(true);
+    setOriginalRecordingUrl(currentAnnotation.recording);
+    if (audioRecorderRef.current) {
+      audioRecorderRef.current.resetRecording();
+      audioRecorderRef.current.startRecording();
+    }
   };
 
   // Handle next/previous navigation
@@ -120,8 +181,14 @@ function JeopardyTask({ config, data, onUpdate, annotations, initialIndex = 0, o
       setBuzzLatency(null);
       setQuestionStartTime(null);
       setBuzzed(false);
-      setAnswer('');
       setBuzzTime(null);
+      setTimer(0);
+      setIsTimerRunning(false);
+      setHasReportedIssue(false);
+      setReRecordingCount(0);
+      setOriginalRecordingUrl(null);
+      setIsRecordingComplete(false);
+      setAudioLength(null);
     }
   };
 
@@ -132,10 +199,20 @@ function JeopardyTask({ config, data, onUpdate, annotations, initialIndex = 0, o
       setBuzzLatency(null);
       setQuestionStartTime(null);
       setBuzzed(false);
-      setAnswer('');
       setBuzzTime(null);
+      setTimer(0);
+      setIsTimerRunning(false);
+      setHasReportedIssue(false);
+      setReRecordingCount(0);
+      setOriginalRecordingUrl(null);
+      setIsRecordingComplete(false);
+      setAudioLength(null);
     }
   };
+
+  if (!currentRow) {
+    return <h5>Loading task data...</h5>;
+  }
 
   return (
     <Card className="mb-3">
@@ -148,6 +225,11 @@ function JeopardyTask({ config, data, onUpdate, annotations, initialIndex = 0, o
       <Card.Body>
         <p className="text-muted mb-3">{config.description}</p>
 
+        {/* Timer display */}
+        <div className="mb-3">
+          <h4>Time: {(timer / 1000).toFixed(1)}s</h4>
+        </div>
+
         {/* Audio player */}
         {config.audio && currentRow?.filename && (
           <div className="mb-3">
@@ -156,7 +238,15 @@ function JeopardyTask({ config, data, onUpdate, annotations, initialIndex = 0, o
             ) : audioError ? (
               <Alert variant="warning">{audioError}</Alert>
             ) : audioUrl ? (
-              <audio controls key={currentRow.filename} style={{ width: '100%' }}>
+              <audio 
+                ref={audioRef}
+                controls 
+                key={currentRow.filename} 
+                style={{ width: '100%' }}
+                onPlay={handleAudioPlay}
+                onPause={handleAudioPause}
+                onLoadedMetadata={handleAudioLoadedMetadata}
+              >
                 <source src={audioUrl} type="audio/mp3" />
                 Your browser does not support the audio element.
               </audio>
@@ -165,31 +255,38 @@ function JeopardyTask({ config, data, onUpdate, annotations, initialIndex = 0, o
         )}
 
         <div className="mb-3">
-          <strong>Question:</strong> {currentRow.question}
-        </div>
-
-        <div className="mb-3">
           {!buzzed ? (
             <Button
               variant="danger"
               onClick={handleBuzzIn}
-              disabled={!questionStartTime}
+              size="lg"
+              className="w-100"
+              disabled={!audioStarted}
+              style={{ opacity: audioStarted ? 1 : 0.5 }}
             >
               Buzz In!
             </Button>
           ) : (
             <div className="mb-3">
-              <p><strong>Your buzz latency:</strong> {buzzLatency} ms</p>
-              <Form.Control
-                type="text"
-                value={answer}
-                onChange={(e) => setAnswer(e.target.value)}
-                placeholder="Enter your answer"
-                className="mb-2"
-              />
-              <Button variant="primary" onClick={handleAnswerSubmit}>
-                Submit Answer
-              </Button>
+              <div className="mb-3">
+                <AudioRecorder
+                  ref={audioRecorderRef}
+                  onRecordingComplete={handleRecordingComplete}
+                  allowReRecording={false}
+                  initialDelay={500}
+                />
+              </div>
+              {isRecordingComplete && !hasReportedIssue && (
+                <div className="mt-3">
+                  <Button 
+                    variant="outline-warning" 
+                    onClick={handleReportIssue}
+                    className="w-100"
+                  >
+                    Report Audio Issue
+                  </Button>
+                </div>
+              )}
             </div>
           )}
         </div>
