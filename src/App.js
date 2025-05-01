@@ -293,6 +293,15 @@ function AppContent({
     try {
       const userId = generateUserId();
       const taskAnnotations = annotations[taskId] || {};
+      
+      // Log the sync attempt
+      console.log('Syncing to cloud:', {
+        taskId,
+        userId,
+        annotationCount: Object.keys(taskAnnotations).length,
+        storageBucket: storage.bucket
+      });
+      
       const annotationsRef = ref(storage, `annotations/${userId}/${taskId}.json`);
       await uploadString(annotationsRef, JSON.stringify(taskAnnotations), 'raw');
       
@@ -308,7 +317,7 @@ function AppContent({
       }
     } catch (error) {
       console.error('Error syncing to cloud:', error);
-      setToastMessage('Error syncing to cloud');
+      setToastMessage(`Error syncing to cloud: ${error.message}`);
       setToastVariant('danger');
       setShowToast(true);
     } finally {
