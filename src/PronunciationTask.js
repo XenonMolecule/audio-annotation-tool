@@ -147,38 +147,68 @@ function PronunciationTask({ config, data, onUpdate, annotations, initialIndex =
     setToastVariant('info');
     setShowToast(true);
 
-    const userId = localStorage.getItem('annotationUserId') || (() => {
-      const id = crypto.randomUUID();
-      localStorage.setItem('annotationUserId', id);
-      return id;
-    })();
+    try {
+      // Log storage configuration for debugging
+      console.log('Storage configuration:', {
+        bucket: storage.bucket,
+        app: storage.app.name,
+        projectId: storage.app.options.projectId
+      });
 
-    const filename = `pronunciation_${data[rowIndex].word}_${Date.now()}.wav`;
-    const storageRef = ref(storage, `recordings/${userId}/${filename}`);
-    const task = uploadBytesResumable(storageRef, blob);
+      const userId = localStorage.getItem('annotationUserId') || (() => {
+        const id = crypto.randomUUID();
+        localStorage.setItem('annotationUserId', id);
+        return id;
+      })();
 
-    task.on('state_changed',
-      snap => {
-        const progress = (snap.bytesTransferred / snap.totalBytes) * 100;
-        setUploadProgress(progress);
-      },
-      err => {
-        console.error('Upload error:', err);
-        setToastMessage('Upload failed');
-        setToastVariant('danger');
-        setShowToast(true);
-        setIsUploading(false);
-      },
-      async () => {
-        const url = await getDownloadURL(task.snapshot.ref);
-        await onUpdate(rowIndex, { recording: url, metadata: { ...rowMetadata, timestamp: Date.now() } });
-        setPlaybackUrl(url);
-        setToastMessage('Recording saved');
-        setToastVariant('success');
-        setShowToast(true);
-        setIsUploading(false);
-      }
-    );
+      const filename = `pronunciation_${data[rowIndex].word}_${Date.now()}.wav`;
+      const storageRef = ref(storage, `recordings/${userId}/${filename}`);
+      
+      // Log the storage reference for debugging
+      console.log('Storage reference:', {
+        path: storageRef.fullPath,
+        bucket: storageRef.bucket
+      });
+
+      const task = uploadBytesResumable(storageRef, blob);
+
+      task.on('state_changed',
+        snap => {
+          const progress = (snap.bytesTransferred / snap.totalBytes) * 100;
+          setUploadProgress(progress);
+        },
+        err => {
+          console.error('Upload error:', err);
+          setToastMessage(`Upload failed: ${err.message}`);
+          setToastVariant('danger');
+          setShowToast(true);
+          setIsUploading(false);
+        },
+        async () => {
+          try {
+            const url = await getDownloadURL(task.snapshot.ref);
+            await onUpdate(rowIndex, { recording: url, metadata: { ...rowMetadata, timestamp: Date.now() } });
+            setPlaybackUrl(url);
+            setToastMessage('Recording saved');
+            setToastVariant('success');
+            setShowToast(true);
+          } catch (err) {
+            console.error('Error getting download URL:', err);
+            setToastMessage(`Error saving recording: ${err.message}`);
+            setToastVariant('danger');
+            setShowToast(true);
+          } finally {
+            setIsUploading(false);
+          }
+        }
+      );
+    } catch (err) {
+      console.error('Error in uploadAudio:', err);
+      setToastMessage(`Upload failed: ${err.message}`);
+      setToastVariant('danger');
+      setShowToast(true);
+      setIsUploading(false);
+    }
   };
 
   const goPrev = async () => {
