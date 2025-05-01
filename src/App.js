@@ -72,7 +72,8 @@ function App() {
 
   // Load configuration and datasets.
   useEffect(() => {
-    fetch('/audio-annotation-tool/config.yaml')
+    const baseUrl = process.env.PUBLIC_URL || '';
+    fetch(`${baseUrl}/config.yaml`)
       .then((res) => res.text())
       .then((text) => {
         const doc = yaml.load(text);
@@ -82,7 +83,7 @@ function App() {
         }
         setConfig(doc);
         doc.tasks.forEach((task) => {
-          fetch('/audio-annotation-tool/' + task.data_file)
+          fetch(`${baseUrl}/${task.data_file}`)
             .then((r) => r.text())
             .then((fileText) => {
               const lines = fileText.split('\n').filter((line) => line.trim() !== '');
@@ -327,7 +328,8 @@ function AppContent({
     // Update URL with query parameter
     const params = new URLSearchParams(window.location.search);
     params.set('task', taskId);
-    navigate(`/audio-annotation-tool?${params.toString()}`);
+    const baseUrl = process.env.PUBLIC_URL || '';
+    navigate(`${baseUrl}?${params.toString()}`);
   };
 
   // Handle annotation update
