@@ -1,36 +1,67 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useMemo } from 'react';
 import { Card, Button, Collapse, Form } from 'react-bootstrap';
 
-function WerewolfTask({ config, data, onUpdate }) {
-  const [currentIndex, setCurrentIndex] = useState(0);
-  const [selectedChoice, setSelectedChoice] = useState(null);
+function WerewolfTask({ config, data, onUpdate, annotations, initialIndex = 0, onSync }) {
+  const [currentIndex, setCurrentIndex] = useState(initialIndex);
   const [showSpeakerRename, setShowSpeakerRename] = useState(false);
-  const [speakerMap, setSpeakerMap] = useState({});
 
-  // When the current row changes, load saved annotations for that row from localStorage.
-  useEffect(() => {
-    const savedData = localStorage.getItem(`werewolf_annotations_row_${currentIndex}`);
-    if (savedData) {
-      const parsed = JSON.parse(savedData);
-      setSelectedChoice(parsed.selectedChoice || null);
-      setSpeakerMap(parsed.speakerMap || {});
-    } else {
-      setSelectedChoice(null);
-      setSpeakerMap({});
-    }
-  }, [currentIndex]);
+  // Get current annotation or initialize empty
+  const currentAnnotation = useMemo(() => {
+    const annotation = annotations[currentIndex];
+    if (annotation) return annotation;
+    
+    // If nothing found, return empty annotation with metadata
+    return {
+      selected: null,
+      speakerMap: {},
+      metadata: {
+        timestamp: Date.now()
+      }
+    };
+  }, [annotations, currentIndex]);
 
-  // Whenever selectedChoice or speakerMap changes, save them to localStorage for this row.
-  useEffect(() => {
-    const saveData = { selectedChoice, speakerMap };
-    localStorage.setItem(`werewolf_annotations_row_${currentIndex}`, JSON.stringify(saveData));
-  }, [currentIndex, selectedChoice, speakerMap]);
+  const { selected, speakerMap, metadata } = currentAnnotation;
+
+  // Handle choice selection
+  const handleChoice = async (choice) => {
+    const updatedAnnotation = {
+      selected: choice,
+      speakerMap,
+      metadata: {
+        ...metadata,
+        timestamp: Date.now()
+      }
+    };
+    onUpdate(currentIndex, updatedAnnotation);
+    if (onSync) await onSync();
+  };
+
+  // Handle speaker name change
+  const handleSpeakerChange = async (label, value) => {
+    const updatedAnnotation = {
+      selected,
+      speakerMap: {
+        ...speakerMap,
+        [label]: value
+      },
+      metadata: {
+        ...metadata,
+        timestamp: Date.now()
+      }
+    };
+    onUpdate(currentIndex, updatedAnnotation);
+    if (onSync) await onSync();
+  };
 
   if (!data || data.length === 0) {
-    return <h5>Loading task data…</h5>;
+    return <h5>Loading task data...</h5>;
   }
 
   const currentRow = data[currentIndex];
+  if (!currentRow) {
+    return <h5>Error: Invalid row index</h5>;
+  }
+
   const rawTranscript = currentRow.transcript || '[Auto-generated transcript not available]';
 
   // Extract unique speaker tags using a regex that matches any text after "[SPEAKER_" until "]".
@@ -65,23 +96,16 @@ function WerewolfTask({ config, data, onUpdate }) {
   const allChoices = [...choices, ...extraChoices];
 
   // Handlers.
-  const handleChoice = (choice) => {
-    setSelectedChoice(choice);
-    onUpdate(currentIndex, { selected: choice });
-  };
-
-  const handleSpeakerChange = (label, value) => {
-    setSpeakerMap((prev) => ({ ...prev, [label]: value }));
-  };
-
-  const goNext = () => {
+  const goNext = async () => {
     if (currentIndex < data.length - 1) {
+      if (onSync) await onSync();
       setCurrentIndex(currentIndex + 1);
     }
   };
 
-  const goPrev = () => {
+  const goPrev = async () => {
     if (currentIndex > 0) {
+      if (onSync) await onSync();
       setCurrentIndex(currentIndex - 1);
     }
   };
@@ -147,7 +171,7 @@ function WerewolfTask({ config, data, onUpdate }) {
           <Collapse in={showSpeakerRename}>
             <div className="mt-3">
               <p style={{ fontStyle: 'italic' }}>
-                Rename each speaker (type a new name without brackets). The transcript updates live.
+                [Optional] Rename each speaker (type a new name without brackets). The transcript updates live.
               </p>
               {uniqueSpeakers.map((label) => (
                 <div key={label} className="mb-2">
@@ -172,7 +196,7 @@ function WerewolfTask({ config, data, onUpdate }) {
             {allChoices.map(choice => (
               <Button
                 key={choice}
-                variant={selectedChoice === choice ? 'primary' : 'outline-primary'}
+                variant={selected === choice ? 'primary' : 'outline-primary'}
                 onClick={() => handleChoice(choice)}
                 className="m-2"
               >
@@ -180,9 +204,9 @@ function WerewolfTask({ config, data, onUpdate }) {
               </Button>
             ))}
           </div>
-          {selectedChoice && (
+          {selected && (
             <p className="mt-2">
-              <strong>Your choice:</strong> {selectedChoice}
+              <strong>Your choice:</strong> {selected}
             </p>
           )}
         </div>

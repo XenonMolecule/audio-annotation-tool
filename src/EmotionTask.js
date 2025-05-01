@@ -1,33 +1,57 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { Card, Button } from 'react-bootstrap';
 
-function EmotionTask({ config, data, onUpdate }) {
-  const [currentIndex, setCurrentIndex] = useState(0);
-  const [selectedEmotion, setSelectedEmotion] = useState(null);
+function EmotionTask({ config, data, onUpdate, annotations, initialIndex = 0, onSync }) {
+  const [currentIndex, setCurrentIndex] = useState(initialIndex);
+
+  // Get current annotation or initialize empty
+  const currentAnnotation = useMemo(() => {
+    const annotation = annotations[currentIndex];
+    if (annotation) return annotation;
+    
+    // If nothing found, return empty annotation with metadata
+    return {
+      emotion: null,
+      metadata: {
+        timestamp: Date.now()
+      }
+    };
+  }, [annotations, currentIndex]);
+
+  const { emotion: selectedEmotion, metadata } = currentAnnotation;
 
   if (!data || data.length === 0) {
-    return <h5>Loading task data…</h5>;
+    return <h5>Loading task data...</h5>;
   }
 
   const currentRow = data[currentIndex];
   const choices = Array.isArray(currentRow[config.choice_field]) ? currentRow[config.choice_field] : [];
 
-  const handleChoice = (choice) => {
-    setSelectedEmotion(choice);
-    onUpdate(currentIndex, { selected: choice });
+  // Handle emotion selection
+  const handleEmotionSelect = async (newEmotion) => {
+    const updatedAnnotation = {
+      emotion: newEmotion,
+      metadata: {
+        ...metadata,
+        timestamp: Date.now()
+      }
+    };
+    onUpdate(currentIndex, updatedAnnotation);
+    if (onSync) await onSync();
   };
 
-  const goNext = () => {
+  // Handle next/previous navigation
+  const goNext = async () => {
     if (currentIndex < data.length - 1) {
+      if (onSync) await onSync();
       setCurrentIndex(currentIndex + 1);
-      setSelectedEmotion(null);
     }
   };
 
-  const goPrev = () => {
+  const goPrev = async () => {
     if (currentIndex > 0) {
+      if (onSync) await onSync();
       setCurrentIndex(currentIndex - 1);
-      setSelectedEmotion(null);
     }
   };
 
@@ -62,7 +86,7 @@ function EmotionTask({ config, data, onUpdate }) {
             <Button
               key={choice}
               variant={selectedEmotion === choice ? 'primary' : 'outline-primary'}
-              onClick={() => handleChoice(choice)}
+              onClick={() => handleEmotionSelect(choice)}
               className="mr-2 mb-2"
             >
               {choice}

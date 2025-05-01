@@ -1,7 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { Container, Navbar, Nav, Button, Modal } from 'react-bootstrap';
+import { Container, Navbar, Nav, Button, Modal, Toast, ToastContainer } from 'react-bootstrap';
+import { BrowserRouter as Router, Routes, Route, useParams, useNavigate } from 'react-router-dom';
 import yaml from 'js-yaml';
 import ReactMarkdown from 'react-markdown';
+import { ref, uploadString } from 'firebase/storage';
+import { storage } from './firebase';
 
 import WerewolfTask from './WerewolfTask';
 import PronunciationTask from './PronunciationTask';
@@ -12,8 +15,60 @@ function App() {
   const [config, setConfig] = useState(null);
   const [datasets, setDatasets] = useState({});
   const [annotations, setAnnotations] = useState({});
-  const [activeTaskIndex, setActiveTaskIndex] = useState(0);
   const [showInstructions, setShowInstructions] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [showToast, setShowToast] = useState(false);
+  const [toastMessage, setToastMessage] = useState('');
+  const [toastVariant, setToastVariant] = useState('success');
+
+  // Generate or retrieve user ID
+  const generateUserId = () => {
+    let userId = localStorage.getItem('annotationUserId');
+    if (!userId) {
+      userId = crypto.randomUUID();
+      localStorage.setItem('annotationUserId', userId);
+    }
+    return userId;
+  };
+
+  // Get backup threshold for a task (10% of total items)
+  const getBackupThreshold = (taskId) => {
+    const taskData = datasets[taskId] || [];
+    return Math.max(1, Math.floor(taskData.length * 0.1));
+  };
+
+  // Check if we should create a backup
+  // eslint-disable-next-line no-unused-vars
+  const shouldCreateBackup = (taskId) => {
+    const taskAnnotations = annotations[taskId] || {};
+    const annotationCount = Object.keys(taskAnnotations).length;
+    const lastBackupCount = parseInt(localStorage.getItem(`backupCount_${taskId}`) || '0', 10);
+    const threshold = getBackupThreshold(taskId);
+    
+    return annotationCount >= lastBackupCount + threshold;
+  };
+
+  // Create a backup
+  // eslint-disable-next-line no-unused-vars
+  const createBackup = async (taskId) => {
+    try {
+      const userId = generateUserId();
+      const timestamp = new Date().toISOString();
+      const backupRef = ref(storage, `annotations/${userId}/backups/${taskId}_${timestamp}.json`);
+      const taskAnnotations = annotations[taskId] || {};
+      await uploadString(backupRef, JSON.stringify(taskAnnotations), 'raw');
+      
+      // Update last backup count
+      const annotationCount = Object.keys(taskAnnotations).length;
+      localStorage.setItem(`backupCount_${taskId}`, annotationCount.toString());
+      
+      setToastMessage(`Backup created for ${taskId}`);
+      setToastVariant('success');
+      setShowToast(true);
+    } catch (error) {
+      console.error('Error creating backup:', error);
+    }
+  };
 
   // Load configuration and datasets.
   useEffect(() => {
@@ -45,27 +100,266 @@ function App() {
     const saved = localStorage.getItem('annotations');
     if (saved) {
       try {
-        setAnnotations(JSON.parse(saved));
+        const parsed = JSON.parse(saved);
+        // Ensure we have a valid object structure
+        if (typeof parsed === 'object' && parsed !== null) {
+          setAnnotations(parsed);
+        } else {
+          console.error('Invalid annotations format in localStorage');
+          setAnnotations({});
+        }
       } catch (e) {
         console.error('Error parsing annotations from localStorage:', e);
+        setAnnotations({});
       }
     }
   }, []);
 
   // Save annotations to localStorage whenever they change.
   useEffect(() => {
-    localStorage.setItem('annotations', JSON.stringify(annotations));
+    if (Object.keys(annotations).length > 0) {
+      localStorage.setItem('annotations', JSON.stringify(annotations));
+    }
   }, [annotations]);
 
-  // Update annotations (called by tasks)
-  const handleAnnotationUpdate = (taskId, rowIndex, data) => {
+  if (!config || !config.tasks) {
+    return (
+      <Container className="mt-3">
+        <h5>Loading configuration...</h5>
+        <p>Error: config.yaml does not contain a valid tasks array.</p>
+      </Container>
+    );
+  }
+
+  return (
+    <Router>
+      <Routes>
+        <Route path="/audio-annotation-tool/:taskId" element={
+          <AppContent 
+            config={config}
+            datasets={datasets}
+            annotations={annotations}
+            setAnnotations={setAnnotations}
+            showInstructions={showInstructions}
+            setShowInstructions={setShowInstructions}
+            isSyncing={isSyncing}
+            setIsSyncing={setIsSyncing}
+            showToast={showToast}
+            setShowToast={setShowToast}
+            toastMessage={toastMessage}
+            setToastMessage={setToastMessage}
+            toastVariant={toastVariant}
+            setToastVariant={setToastVariant}
+          />
+        } />
+        <Route path="/audio-annotation-tool" element={
+          <AppContent 
+            config={config}
+            datasets={datasets}
+            annotations={annotations}
+            setAnnotations={setAnnotations}
+            showInstructions={showInstructions}
+            setShowInstructions={setShowInstructions}
+            isSyncing={isSyncing}
+            setIsSyncing={setIsSyncing}
+            showToast={showToast}
+            setShowToast={setShowToast}
+            toastMessage={toastMessage}
+            setToastMessage={setToastMessage}
+            toastVariant={toastVariant}
+            setToastVariant={setToastVariant}
+          />
+        } />
+      </Routes>
+    </Router>
+  );
+}
+
+function AppContent({ 
+  config, 
+  datasets, 
+  annotations, 
+  setAnnotations,
+  showInstructions,
+  setShowInstructions,
+  isSyncing,
+  setIsSyncing,
+  showToast,
+  setShowToast,
+  toastMessage,
+  setToastMessage,
+  toastVariant,
+  setToastVariant
+}) {
+  const { taskId } = useParams();
+  const navigate = useNavigate();
+  const [activeTaskIndex, setActiveTaskIndex] = useState(0);
+  const [isSingleTaskMode, setIsSingleTaskMode] = useState(false);
+
+  // Handle all task and mode initialization
+  useEffect(() => {
+    // Check for single-task mode
+    const params = new URLSearchParams(window.location.search);
+    const isOnlyMode = params.get('mode') === 'only';
+    setIsSingleTaskMode(isOnlyMode);
+
+    // Find the correct task index based on URL
+    if (taskId) {
+      const taskIndex = config.tasks.findIndex(task => task.id === taskId);
+      if (taskIndex !== -1) {
+        setActiveTaskIndex(taskIndex);
+      } else {
+        // If taskId is invalid, default to first task
+        setActiveTaskIndex(0);
+      }
+    } else {
+      // If no taskId in URL, default to first task
+      setActiveTaskIndex(0);
+    }
+  }, [taskId, config.tasks]);
+
+  // Generate or retrieve user ID
+  const generateUserId = () => {
+    let userId = localStorage.getItem('annotationUserId');
+    if (!userId) {
+      userId = crypto.randomUUID();
+      localStorage.setItem('annotationUserId', userId);
+    }
+    return userId;
+  };
+
+  // Get backup threshold for a task (10% of total items)
+  const getBackupThreshold = (taskId) => {
+    const taskData = datasets[taskId] || [];
+    return Math.max(1, Math.floor(taskData.length * 0.1));
+  };
+
+  // Check if we should create a backup
+  // eslint-disable-next-line no-unused-vars
+  const shouldCreateBackup = (taskId) => {
+    const taskAnnotations = annotations[taskId] || {};
+    const annotationCount = Object.keys(taskAnnotations).length;
+    const lastBackupCount = parseInt(localStorage.getItem(`backupCount_${taskId}`) || '0', 10);
+    const threshold = getBackupThreshold(taskId);
+    
+    return annotationCount >= lastBackupCount + threshold;
+  };
+
+  // Create a backup
+  // eslint-disable-next-line no-unused-vars
+  const createBackup = async (taskId) => {
+    try {
+      const userId = generateUserId();
+      const timestamp = new Date().toISOString();
+      const backupRef = ref(storage, `annotations/${userId}/backups/${taskId}_${timestamp}.json`);
+      const taskAnnotations = annotations[taskId] || {};
+      await uploadString(backupRef, JSON.stringify(taskAnnotations), 'raw');
+      
+      // Update last backup count
+      const annotationCount = Object.keys(taskAnnotations).length;
+      localStorage.setItem(`backupCount_${taskId}`, annotationCount.toString());
+      
+      setToastMessage(`Backup created for ${taskId}`);
+      setToastVariant('success');
+      setShowToast(true);
+    } catch (error) {
+      console.error('Error creating backup:', error);
+    }
+  };
+
+  // Find first unannotated item for a task
+  const findFirstUnannotatedIndex = (taskId) => {
+    const taskData = datasets[taskId] || [];
+    const taskAnnotations = annotations[taskId] || {};
+    
+    for (let i = 0; i < taskData.length; i++) {
+      const annotation = taskAnnotations[i];
+      if (!annotation) return i;
+      
+      // Check for task-specific completion
+      if (taskId === 'werewolf' && !annotation.selected) return i;
+      if (taskId === 'pronunciation' && !annotation.recording) return i;
+      if (taskId === 'emotion' && !annotation.emotion) return i;
+      if (taskId === 'jeopardy' && !annotation.answer) return i;
+    }
+    return 0;
+  };
+
+  // Sync annotations to cloud
+  const syncToCloud = async (taskId, suppressToast = false) => {
+    if (isSyncing) return;
+    
+    setIsSyncing(true);
+    try {
+      const userId = generateUserId();
+      const taskAnnotations = annotations[taskId] || {};
+      const annotationsRef = ref(storage, `annotations/${userId}/${taskId}.json`);
+      await uploadString(annotationsRef, JSON.stringify(taskAnnotations), 'raw');
+      
+      if (!suppressToast) {
+        setToastMessage(`Annotations synced to cloud for ${taskId}`);
+        setToastVariant('success');
+        setShowToast(true);
+      }
+      
+      // Check if we should create a backup
+      if (shouldCreateBackup(taskId)) {
+        await createBackup(taskId);
+      }
+    } catch (error) {
+      console.error('Error syncing to cloud:', error);
+      setToastMessage('Error syncing to cloud');
+      setToastVariant('danger');
+      setShowToast(true);
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  // Handle task navigation
+  const handleTaskNavigation = async (taskId, index) => {
+    if (isSingleTaskMode) return; // Disable navigation in single-task mode
+    
+    // Sync current task before switching
+    if (activeTask) {
+      await syncToCloud(activeTask.id);
+    }
+    
+    setActiveTaskIndex(index);
+    navigate(`/audio-annotation-tool/${taskId}`);
+  };
+
+  // Handle annotation update
+  const handleAnnotationUpdate = async (taskId, rowIndex, data) => {
     setAnnotations((prev) => {
       const taskAnnotations = prev[taskId] || {};
       const updated = { ...prev, [taskId]: { ...taskAnnotations, [rowIndex]: data } };
+      
+      // Save to localStorage
       localStorage.setItem('annotations', JSON.stringify(updated));
+      
+      // Check if we should create a backup
+      if (shouldCreateBackup(taskId)) {
+        createBackup(taskId);
+      }
+      
       return updated;
     });
   };
+
+  const tasks = config.tasks;
+  const safeTaskIndex = activeTaskIndex < tasks.length ? activeTaskIndex : 0;
+  const activeTask = tasks[safeTaskIndex];
+  const taskData = datasets[activeTask.id] || [];
+
+  if (!taskData || taskData.length === 0) {
+    return (
+      <Container className="mt-3">
+        <h5>Loading task data...</h5>
+        <p>Please wait while we load the data for {activeTask.id}.</p>
+      </Container>
+    );
+  }
 
   // Export annotations using a Blob.
   const exportAnnotations = () => {
@@ -80,21 +374,6 @@ function App() {
     document.body.removeChild(downloadAnchor);
     URL.revokeObjectURL(url);
   };
-
-  if (!config || !config.tasks) {
-    return (
-      <Container className="mt-3">
-        <h5>Loading configuration...</h5>
-        <p>Error: config.yaml does not contain a valid tasks array.</p>
-      </Container>
-    );
-  }
-
-  // Ensure activeTaskIndex is within bounds.
-  const tasks = config.tasks;
-  const safeTaskIndex = activeTaskIndex < tasks.length ? activeTaskIndex : 0;
-  const activeTask = tasks[safeTaskIndex];
-  const taskData = datasets[activeTask.id] || [];
 
   let TaskComponent = null;
   switch (activeTask.type) {
@@ -118,21 +397,22 @@ function App() {
     <>
       <Navbar bg="dark" variant="dark" expand="lg" className="px-4">
         <Navbar.Brand>Audio Annotation Tool</Navbar.Brand>
-        <Nav className="ml-auto">
-          {tasks.map((task, index) => (
-            <Nav.Link
-              key={task.id}
-              active={safeTaskIndex === index}
-              onClick={() => setActiveTaskIndex(index)}
-            >
-              {task.id}
-            </Nav.Link>
-          ))}
-        </Nav>
+        {!isSingleTaskMode && (
+          <Nav className="ml-auto">
+            {tasks.map((task, index) => (
+              <Nav.Link
+                key={task.id}
+                active={safeTaskIndex === index}
+                onClick={() => handleTaskNavigation(task.id, index)}
+              >
+                {task.id}
+              </Nav.Link>
+            ))}
+          </Nav>
+        )}
       </Navbar>
 
       <Container className="mt-4 mb-5" style={{ maxWidth: '900px' }}>
-        {/* Improved Instructions Button */}
         <div className="d-flex justify-content-end mb-2">
           <Button
             variant="outline-secondary"
@@ -151,6 +431,8 @@ function App() {
             handleAnnotationUpdate(activeTask.id, rowIndex, rowData)
           }
           annotations={annotations[activeTask.id] || {}}
+          initialIndex={findFirstUnannotatedIndex(activeTask.id)}
+          onSync={() => syncToCloud(activeTask.id)}
         />
 
         <div className="d-flex justify-content-end mt-3">
@@ -178,6 +460,31 @@ function App() {
           </Button>
         </Modal.Footer>
       </Modal>
+
+      <ToastContainer position="top-end" className="p-3">
+        <Toast 
+          show={showToast} 
+          onClose={() => setShowToast(false)} 
+          delay={3000} 
+          autohide
+          className={toastVariant === 'success' ? 'bg-success-subtle' : 
+                    toastVariant === 'warning' ? 'bg-warning-subtle' : 
+                    'bg-danger-subtle'}
+        >
+          <Toast.Header className={toastVariant === 'success' ? 'bg-success-subtle' : 
+                                 toastVariant === 'warning' ? 'bg-warning-subtle' : 
+                                 'bg-danger-subtle'}>
+            <strong className="me-auto">{toastVariant === 'success' ? 'Success' : 
+                                      toastVariant === 'warning' ? 'Warning' : 
+                                      'Error'}</strong>
+          </Toast.Header>
+          <Toast.Body className={toastVariant === 'success' ? 'text-success' : 
+                               toastVariant === 'warning' ? 'text-warning' : 
+                               'text-danger'}>
+            {toastMessage}
+          </Toast.Body>
+        </Toast>
+      </ToastContainer>
     </>
   );
 }
