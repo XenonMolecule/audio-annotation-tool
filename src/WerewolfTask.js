@@ -1,9 +1,20 @@
-import React, { useState, useMemo } from 'react';
-import { Card, Button, Collapse, Form } from 'react-bootstrap';
+import React, { useState, useMemo, useEffect } from 'react';
+import { Card, Button, Collapse, Form, Alert } from 'react-bootstrap';
+import { ref, getDownloadURL } from 'firebase/storage';
+import { storage } from './firebase';
 
 function WerewolfTask({ config, data, onUpdate, annotations, initialIndex = 0, onSync }) {
   const [currentIndex, setCurrentIndex] = useState(initialIndex);
   const [showSpeakerRename, setShowSpeakerRename] = useState(false);
+  const [audioUrl, setAudioUrl] = useState(null);
+  const [audioError, setAudioError] = useState(null);
+  const [isLoadingAudio, setIsLoadingAudio] = useState(false);
+
+  // Compute currentRow using useMemo
+  const currentRow = useMemo(() => {
+    if (!data || data.length === 0) return null;
+    return data[currentIndex];
+  }, [data, currentIndex]);
 
   // Get current annotation or initialize empty
   const currentAnnotation = useMemo(() => {
@@ -21,6 +32,43 @@ function WerewolfTask({ config, data, onUpdate, annotations, initialIndex = 0, o
   }, [annotations, currentIndex]);
 
   const { selected, speakerMap, metadata } = currentAnnotation;
+
+  // Load audio URL when current row changes
+  useEffect(() => {
+    const loadAudioUrl = async () => {
+      if (!config.audio || !currentRow?.filename) {
+        setAudioUrl(null);
+        setAudioError(null);
+        setIsLoadingAudio(false);
+        return;
+      }
+
+      setIsLoadingAudio(true);
+      setAudioError(null);
+      
+      try {
+        const storageRef = ref(storage, `audio/${config.id}/${currentRow.filename}`);
+        const url = await getDownloadURL(storageRef);
+        setAudioUrl(url);
+        setAudioError(null);
+      } catch (error) {
+        console.error('Error loading audio URL:', error);
+        setAudioUrl(null);
+        if (error.code === 'storage/object-not-found') {
+          setAudioError('Audio not available');
+        } else {
+          setAudioError('Error loading audio');
+        }
+      } finally {
+        setIsLoadingAudio(false);
+      }
+    };
+    loadAudioUrl();
+  }, [config, currentRow]);
+
+  if (!currentRow) {
+    return <h5>Loading task data...</h5>;
+  }
 
   // Handle choice selection
   const handleChoice = async (choice) => {
@@ -52,15 +100,6 @@ function WerewolfTask({ config, data, onUpdate, annotations, initialIndex = 0, o
     onUpdate(currentIndex, updatedAnnotation);
     if (onSync) await onSync();
   };
-
-  if (!data || data.length === 0) {
-    return <h5>Loading task data...</h5>;
-  }
-
-  const currentRow = data[currentIndex];
-  if (!currentRow) {
-    return <h5>Error: Invalid row index</h5>;
-  }
 
   const rawTranscript = currentRow.transcript || '[Auto-generated transcript not available]';
 
@@ -154,12 +193,18 @@ function WerewolfTask({ config, data, onUpdate, annotations, initialIndex = 0, o
         </div>
 
         {/* Audio player */}
-        {config.audio && currentRow.filename && (
+        {config.audio && currentRow?.filename && (
           <div className="mb-3">
-            <audio controls key={currentRow.filename} style={{ width: '100%' }}>
-              <source src={`/audio-annotation-tool/data/audio/${currentRow.filename}`} type="audio/mp3" />
-              Your browser does not support the audio element.
-            </audio>
+            {isLoadingAudio ? (
+              <div className="text-muted">Loading audio...</div>
+            ) : audioError ? (
+              <Alert variant="warning">{audioError}</Alert>
+            ) : audioUrl ? (
+              <audio controls key={currentRow.filename} style={{ width: '100%' }}>
+                <source src={audioUrl} type="audio/mp3" />
+                Your browser does not support the audio element.
+              </audio>
+            ) : null}
           </div>
         )}
 

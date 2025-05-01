@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { Card, Button, ProgressBar, ToastContainer, Toast } from 'react-bootstrap';
+import { Card, Button, ProgressBar, ToastContainer, Toast, Alert } from 'react-bootstrap';
 import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
 import { storage } from './firebase';
 
@@ -15,6 +15,15 @@ function PronunciationTask({ config, data, onUpdate, annotations, initialIndex =
   const [showToast, setShowToast] = useState(false);
   const [toastMessage, setToastMessage] = useState('');
   const [toastVariant, setToastVariant] = useState('success');
+  const [audioUrl, setAudioUrl] = useState(null);
+  const [audioError, setAudioError] = useState(null);
+  const [isLoadingAudio, setIsLoadingAudio] = useState(false);
+
+  // Compute currentRow using useMemo
+  const currentRow = useMemo(() => {
+    if (!data || data.length === 0) return null;
+    return data[currentIndex];
+  }, [data, currentIndex]);
 
   // Get existing annotation or initialize
   const currentAnnotation = useMemo(() => {
@@ -22,6 +31,39 @@ function PronunciationTask({ config, data, onUpdate, annotations, initialIndex =
     return ann || { recording: null, metadata: { timestamp: Date.now() } };
   }, [annotations, currentIndex]);
   const { metadata } = currentAnnotation;
+
+  // Load audio URL when current row changes
+  useEffect(() => {
+    const loadAudioUrl = async () => {
+      if (!config.audio || !currentRow?.filename) {
+        setAudioUrl(null);
+        setAudioError(null);
+        setIsLoadingAudio(false);
+        return;
+      }
+
+      setIsLoadingAudio(true);
+      setAudioError(null);
+      
+      try {
+        const storageRef = ref(storage, `audio/${config.id}/${currentRow.filename}`);
+        const url = await getDownloadURL(storageRef);
+        setAudioUrl(url);
+        setAudioError(null);
+      } catch (error) {
+        console.error('Error loading audio URL:', error);
+        setAudioUrl(null);
+        if (error.code === 'storage/object-not-found') {
+          setAudioError('Reference audio not available');
+        } else {
+          setAudioError('Error loading audio');
+        }
+      } finally {
+        setIsLoadingAudio(false);
+      }
+    };
+    loadAudioUrl();
+  }, [config, currentRow]);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -50,6 +92,10 @@ function PronunciationTask({ config, data, onUpdate, annotations, initialIndex =
     // Load persisted recording URL
     setPlaybackUrl(currentAnnotation.recording || null);
   }, [currentIndex, currentAnnotation]);
+
+  if (!currentRow) {
+    return <h5>Loading task data...</h5>;
+  }
 
   const startRecording = async () => {
     console.log('Starting recording...');
@@ -223,12 +269,6 @@ function PronunciationTask({ config, data, onUpdate, annotations, initialIndex =
     }
   };
 
-  if (!data || data.length === 0) {
-    return <h5>Loading task data...</h5>;
-  }
-
-  const currentRow = data[currentIndex];
-
   return (
     <Card className="mb-3">
       <Card.Header>
@@ -256,13 +296,19 @@ function PronunciationTask({ config, data, onUpdate, annotations, initialIndex =
         </div>
 
         {/* Reference audio */}
-        {config.audio && currentRow.filename && (
+        {config.audio && currentRow?.filename && (
           <div className="mb-3">
             <p><strong>Reference Audio:</strong></p>
-            <audio controls style={{ width: '100%' }}>
-              <source src={currentRow.filename} type="audio/wav" />
-              Your browser does not support audio.
-            </audio>
+            {isLoadingAudio ? (
+              <div className="text-muted">Loading audio...</div>
+            ) : audioError ? (
+              <Alert variant="warning">{audioError}</Alert>
+            ) : audioUrl ? (
+              <audio controls style={{ width: '100%' }}>
+                <source src={audioUrl} type="audio/wav" />
+                Your browser does not support audio.
+              </audio>
+            ) : null}
           </div>
         )}
 

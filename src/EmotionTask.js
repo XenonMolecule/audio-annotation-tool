@@ -1,8 +1,19 @@
-import React, { useState, useMemo } from 'react';
-import { Card, Button } from 'react-bootstrap';
+import React, { useState, useMemo, useEffect } from 'react';
+import { Card, Button, Alert } from 'react-bootstrap';
+import { ref, getDownloadURL } from 'firebase/storage';
+import { storage } from './firebase';
 
 function EmotionTask({ config, data, onUpdate, annotations, initialIndex = 0, onSync }) {
   const [currentIndex, setCurrentIndex] = useState(initialIndex);
+  const [audioUrl, setAudioUrl] = useState(null);
+  const [audioError, setAudioError] = useState(null);
+  const [isLoadingAudio, setIsLoadingAudio] = useState(false);
+
+  // Compute currentRow using useMemo
+  const currentRow = useMemo(() => {
+    if (!data || data.length === 0) return null;
+    return data[currentIndex];
+  }, [data, currentIndex]);
 
   // Get current annotation or initialize empty
   const currentAnnotation = useMemo(() => {
@@ -20,11 +31,43 @@ function EmotionTask({ config, data, onUpdate, annotations, initialIndex = 0, on
 
   const { emotion: selectedEmotion, metadata } = currentAnnotation;
 
-  if (!data || data.length === 0) {
+  // Load audio URL when current row changes
+  useEffect(() => {
+    const loadAudioUrl = async () => {
+      if (!config.audio || !currentRow?.filename) {
+        setAudioUrl(null);
+        setAudioError(null);
+        setIsLoadingAudio(false);
+        return;
+      }
+
+      setIsLoadingAudio(true);
+      setAudioError(null);
+      
+      try {
+        const storageRef = ref(storage, `audio/${config.id}/${currentRow.filename}`);
+        const url = await getDownloadURL(storageRef);
+        setAudioUrl(url);
+        setAudioError(null);
+      } catch (error) {
+        console.error('Error loading audio URL:', error);
+        setAudioUrl(null);
+        if (error.code === 'storage/object-not-found') {
+          setAudioError('Audio not available');
+        } else {
+          setAudioError('Error loading audio');
+        }
+      } finally {
+        setIsLoadingAudio(false);
+      }
+    };
+    loadAudioUrl();
+  }, [config, currentRow]);
+
+  if (!currentRow) {
     return <h5>Loading task data...</h5>;
   }
 
-  const currentRow = data[currentIndex];
   const choices = Array.isArray(currentRow[config.choice_field]) ? currentRow[config.choice_field] : [];
 
   // Handle emotion selection
@@ -66,12 +109,19 @@ function EmotionTask({ config, data, onUpdate, annotations, initialIndex = 0, on
       <Card.Body>
         <p className="text-muted mb-3">{config.description}</p>
 
-        {config.audio && currentRow.filename && (
+        {/* Audio player */}
+        {config.audio && currentRow?.filename && (
           <div className="mb-3">
-            <audio controls style={{ width: '100%' }}>
-              <source src={currentRow.filename} type="audio/wav" />
-              Your browser does not support the audio element.
-            </audio>
+            {isLoadingAudio ? (
+              <div className="text-muted">Loading audio...</div>
+            ) : audioError ? (
+              <Alert variant="warning">{audioError}</Alert>
+            ) : audioUrl ? (
+              <audio controls key={currentRow.filename} style={{ width: '100%' }}>
+                <source src={audioUrl} type="audio/mp3" />
+                Your browser does not support the audio element.
+              </audio>
+            ) : null}
           </div>
         )}
 
