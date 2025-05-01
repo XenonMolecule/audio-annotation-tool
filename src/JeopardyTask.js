@@ -146,6 +146,7 @@ function JeopardyTask({ config, data, onUpdate, annotations, initialIndex = 0, o
   }, [buzzed, shouldAutoStartRecording]);
 
   const handleRecordingComplete = async (recordingUrl) => {
+    console.log('handleRecordingComplete called with URL:', recordingUrl);
     const updatedAnnotation = {
       buzzTime,
       buzzLatency,
@@ -153,62 +154,158 @@ function JeopardyTask({ config, data, onUpdate, annotations, initialIndex = 0, o
       originalRecording: originalRecordingUrl || recordingUrl,
       reRecordingCount,
       audioLength,
+      answer: "recorded", // Temporary state until user clicks Next
       metadata: {
         ...metadata,
         timestamp: Date.now()
       }
     };
     
+    console.log('Updating annotation with:', updatedAnnotation);
+    setIsRecordingComplete(true);
+    setBuzzed(true);
+    setHasReportedIssue(false);
     await onUpdate(currentIndex, updatedAnnotation);
     if (onSync) await onSync();
-    setIsRecordingComplete(true);
   };
 
   const handleReportIssue = () => {
     setHasReportedIssue(true);
     setOriginalRecordingUrl(currentAnnotation.recording);
+    setReRecordingCount(reRecordingCount + 1);
+    setIsRecordingComplete(false);
     if (audioRecorderRef.current) {
       audioRecorderRef.current.resetRecording();
       audioRecorderRef.current.startRecording();
     }
   };
 
-  // Handle next/previous navigation
-  const goNext = async () => {
-    if (currentIndex < data.length - 1) {
+  // Refresh local state when moving to a new row or annotation changes
+  useEffect(() => {
+    setReRecordingCount(currentAnnotation.reRecordingCount || 0);
+    setOriginalRecordingUrl(currentAnnotation.originalRecording || null);
+    setIsRecordingComplete(!!currentAnnotation.recording);
+    setBuzzed(!!currentAnnotation.answer && currentAnnotation.answer !== 'forfeited');
+    setHasReportedIssue(false);
+  }, [currentAnnotation]);
+
+  // Forfeit handling helper
+  const maybeForfeit = async () => {
+    if (questionStartTime && !buzzed) {
+      const confirmLeave = window.confirm(
+        'You have started listening but not buzzed in. Leaving will forfeit this question. Continue?'
+      );
+      if (!confirmLeave) return false;
+      // Record forfeited annotation
+      const forfeitedAnnotation = {
+        buzzTime: null,
+        buzzLatency: -1,
+        recording: null,
+        originalRecording: null,
+        reRecordingCount: 0,
+        audioLength: null,
+        answer: 'forfeited',
+        metadata: {
+          ...metadata,
+          timestamp: Date.now()
+        }
+      };
+      await onUpdate(currentIndex, forfeitedAnnotation);
       if (onSync) await onSync();
+    }
+    return true;
+  };
+
+  const goNext = async () => {
+    console.log('goNext called, currentIndex:', currentIndex);
+    if (currentIndex < data.length - 1) {
+      const ok = await maybeForfeit();
+      if (!ok) return;
+
+      // If we have a recording, update the annotation to mark it as complete
+      if (currentAnnotation.recording) {
+        console.log('Updating annotation to completed state');
+        const finalAnnotation = {
+          ...currentAnnotation,
+          answer: "completed", // Mark as fully complete when moving to next question
+          metadata: {
+            ...metadata,
+            timestamp: Date.now()
+          }
+        };
+        await onUpdate(currentIndex, finalAnnotation);
+        if (onSync) await onSync();
+      }
+
+      console.log('Moving to next index:', currentIndex + 1);
       setCurrentIndex(currentIndex + 1);
-      setBuzzLatency(null);
+      // Reset local states; useEffect on currentAnnotation will resync
       setQuestionStartTime(null);
-      setBuzzed(false);
-      setBuzzTime(null);
       setTimer(0);
       setIsTimerRunning(false);
-      setHasReportedIssue(false);
-      setReRecordingCount(0);
-      setOriginalRecordingUrl(null);
-      setIsRecordingComplete(false);
+      setAudioStarted(false);
       setAudioLength(null);
+      setHasReportedIssue(false);
+      setBuzzed(false);
+      setIsRecordingComplete(false);
     }
   };
 
   const goPrev = async () => {
     if (currentIndex > 0) {
-      if (onSync) await onSync();
+      const ok = await maybeForfeit();
+      if (!ok) return;
       setCurrentIndex(currentIndex - 1);
-      setBuzzLatency(null);
       setQuestionStartTime(null);
-      setBuzzed(false);
-      setBuzzTime(null);
       setTimer(0);
       setIsTimerRunning(false);
-      setHasReportedIssue(false);
-      setReRecordingCount(0);
-      setOriginalRecordingUrl(null);
-      setIsRecordingComplete(false);
+      setAudioStarted(false);
       setAudioLength(null);
+      setHasReportedIssue(false);
+      setBuzzed(false);
+      setIsRecordingComplete(false);
     }
   };
+
+  useEffect(() => {
+    const handleBeforeUnload = (e) => {
+      if (questionStartTime && !buzzed) {
+        e.preventDefault();
+        e.returnValue = '';
+      }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [questionStartTime, buzzed]);
+
+  // On mount, if questionStartTime was set but not buzzed, save a forfeited annotation
+  useEffect(() => {
+    if (questionStartTime && !buzzed) {
+      const forfeitedAnnotation = {
+        buzzTime: null,
+        buzzLatency: -1,
+        recording: null,
+        originalRecording: null,
+        reRecordingCount: 0,
+        audioLength: null,
+        answer: "forfeited",
+        metadata: {
+          ...metadata,
+          timestamp: Date.now()
+        }
+      };
+      onUpdate(currentIndex, forfeitedAnnotation);
+      if (onSync) onSync();
+    }
+    // Only run on mount
+    // eslint-disable-next-line
+  }, []);
+
+  // Update currentIndex when initialIndex prop changes (e.g., after loading annotations)
+  useEffect(() => {
+    console.log('Initial index changed:', initialIndex);
+    setCurrentIndex(initialIndex);
+  }, [initialIndex]);
 
   if (!currentRow) {
     return <h5>Loading task data...</h5>;
@@ -254,37 +351,52 @@ function JeopardyTask({ config, data, onUpdate, annotations, initialIndex = 0, o
           </div>
         )}
 
+        {/* Recording controls */}
         <div className="mb-3">
-          {!buzzed ? (
+          {isRecordingComplete || currentAnnotation.recording ? (
+            // Completed recording playback
+            <div className="mb-3">
+              <div className="mb-2 text-center text-muted">Your Recording</div>
+              <audio controls src={currentAnnotation.recording} style={{ width: '100%' }} />
+              {reRecordingCount > 0 && (
+                <div className="mt-2 text-center text-muted">
+                  Re-recorded {reRecordingCount} time{reRecordingCount > 1 ? 's' : ''}
+                </div>
+              )}
+              {!hasReportedIssue && (
+                <div className="mt-3">
+                  <Button
+                    variant="outline-warning"
+                    onClick={handleReportIssue}
+                    className="w-100"
+                  >
+                    Report Audio Issue
+                  </Button>
+                </div>
+              )}
+            </div>
+          ) : !buzzed ? (
             <Button
               variant="danger"
               onClick={handleBuzzIn}
               size="lg"
               className="w-100"
-              disabled={!audioStarted}
+              disabled={!audioStarted || isRecordingComplete}
               style={{ opacity: audioStarted ? 1 : 0.5 }}
             >
               Buzz In!
             </Button>
           ) : (
             <div className="mb-3">
-              <div className="mb-3">
-                <AudioRecorder
-                  ref={audioRecorderRef}
-                  onRecordingComplete={handleRecordingComplete}
-                  allowReRecording={false}
-                  initialDelay={500}
-                />
-              </div>
-              {isRecordingComplete && !hasReportedIssue && (
-                <div className="mt-3">
-                  <Button 
-                    variant="outline-warning" 
-                    onClick={handleReportIssue}
-                    className="w-100"
-                  >
-                    Report Audio Issue
-                  </Button>
+              <AudioRecorder
+                ref={audioRecorderRef}
+                onRecordingComplete={handleRecordingComplete}
+                allowReRecording={false}
+                initialDelay={500}
+              />
+              {reRecordingCount > 0 && (
+                <div className="mt-2 text-center text-muted">
+                  Re-recorded {reRecordingCount} time{reRecordingCount > 1 ? 's' : ''}
                 </div>
               )}
             </div>

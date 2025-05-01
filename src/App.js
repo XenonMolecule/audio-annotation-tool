@@ -177,6 +177,7 @@ function AppContent({
   const navigate = useNavigate();
   const [activeTaskIndex, setActiveTaskIndex] = useState(0);
   const [isSingleTaskMode, setIsSingleTaskMode] = useState(false);
+  const [initialTaskIndices, setInitialTaskIndices] = useState({});
 
   // Handle all task and mode initialization
   useEffect(() => {
@@ -210,6 +211,13 @@ function AppContent({
         navigate(`/audio-annotation-tool?${params.toString()}`, { replace: true });
       }
     }
+
+    // Initialize task indices
+    const indices = {};
+    config.tasks.forEach(task => {
+      indices[task.id] = findFirstUnannotatedIndex(task.id);
+    });
+    setInitialTaskIndices(indices);
   }, [config.tasks, navigate]);
 
   // Generate or retrieve user ID
@@ -261,21 +269,41 @@ function AppContent({
     }
   };
 
-  // Find first unannotated item for a task
+  // Find first unannotated item for a task (only used for initial load)
   const findFirstUnannotatedIndex = (taskId) => {
     const taskData = datasets[taskId] || [];
     const taskAnnotations = annotations[taskId] || {};
     
+    console.log('findFirstUnannotatedIndex called for task:', taskId);
+    console.log('Current annotations:', taskAnnotations);
+    
     for (let i = 0; i < taskData.length; i++) {
       const annotation = taskAnnotations[i];
-      if (!annotation) return i;
+      if (!annotation) {
+        console.log('Found unannotated index (no annotation):', i);
+        return i;
+      }
       
       // Check for task-specific completion
-      if (taskId === 'werewolf' && !annotation.selected) return i;
-      if (taskId === 'pronunciation' && !annotation.recording) return i;
-      if (taskId === 'emotion' && !annotation.emotion) return i;
-      if (taskId === 'jeopardy' && !annotation.answer) return i;
+      if (taskId === 'werewolf' && !annotation.selected) {
+        console.log('Found unannotated index (werewolf not selected):', i);
+        return i;
+      }
+      if (taskId === 'pronunciation' && !annotation.recording) {
+        console.log('Found unannotated index (pronunciation no recording):', i);
+        return i;
+      }
+      if (taskId === 'emotion' && !annotation.emotion) {
+        console.log('Found unannotated index (emotion not set):', i);
+        return i;
+      }
+      // For jeopardy, consider it annotated if it has a recording, regardless of answer state
+      if (taskId === 'jeopardy' && !annotation.recording) {
+        console.log('Found unannotated index (jeopardy no recording):', i);
+        return i;
+      }
     }
+    console.log('No unannotated indices found, returning 0');
     return 0;
   };
 
@@ -334,9 +362,12 @@ function AppContent({
 
   // Handle annotation update
   const handleAnnotationUpdate = async (taskId, rowIndex, data) => {
+    console.log('handleAnnotationUpdate called:', { taskId, rowIndex, data });
     setAnnotations((prev) => {
       const taskAnnotations = prev[taskId] || {};
       const updated = { ...prev, [taskId]: { ...taskAnnotations, [rowIndex]: data } };
+      
+      console.log('Updated annotations:', updated);
       
       // Save to localStorage
       localStorage.setItem('annotations', JSON.stringify(updated));
@@ -434,7 +465,7 @@ function AppContent({
             handleAnnotationUpdate(activeTask.id, rowIndex, rowData)
           }
           annotations={annotations[activeTask.id] || {}}
-          initialIndex={findFirstUnannotatedIndex(activeTask.id)}
+          initialIndex={initialTaskIndices[activeTask.id] || 0}
           onSync={() => syncToCloud(activeTask.id)}
         />
 

@@ -156,7 +156,6 @@ const AudioRecorder = forwardRef(({ onRecordingComplete, allowReRecording = fals
         chunksRef.current = [];
         let hasValidAudio = false;
         recorder.ondataavailable = e => {
-          console.log('MediaRecorder: ondataavailable', e.data.size, e.data);
           if (e.data.size > 0) {
             chunksRef.current.push(e.data);
             hasValidAudio = true;
@@ -237,6 +236,7 @@ const AudioRecorder = forwardRef(({ onRecordingComplete, allowReRecording = fals
           setUploadProgress(progress);
         },
         err => {
+          console.error('Upload error:', err);
           setError('Upload failed');
           setIsUploading(false);
         },
@@ -245,10 +245,12 @@ const AudioRecorder = forwardRef(({ onRecordingComplete, allowReRecording = fals
             const url = await getDownloadURL(task.snapshot.ref);
             setRecordingUrl(url);
             setShowReRecord(allowReRecording);
+            // Call onRecordingComplete with the URL after successful upload
             if (onRecordingComplete) {
               onRecordingComplete(url);
             }
           } catch (err) {
+            console.error('Error getting download URL:', err);
             setError('Error getting download URL');
           } finally {
             setIsUploading(false);
@@ -256,6 +258,7 @@ const AudioRecorder = forwardRef(({ onRecordingComplete, allowReRecording = fals
         }
       );
     } catch (err) {
+      console.error('Upload error:', err);
       setError('Upload failed');
       setIsUploading(false);
     }
