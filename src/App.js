@@ -305,21 +305,17 @@ function AppContent({
       const annotationsRef = ref(storage, `annotations/${userId}/${taskId}.json`);
       await uploadString(annotationsRef, JSON.stringify(taskAnnotations), 'raw');
       
-      if (!suppressToast) {
-        setToastMessage(`Annotations synced to cloud for ${taskId}`);
-        setToastVariant('success');
-        setShowToast(true);
-      }
-      
       // Check if we should create a backup
       if (shouldCreateBackup(taskId)) {
         await createBackup(taskId);
       }
     } catch (error) {
       console.error('Error syncing to cloud:', error);
-      setToastMessage(`Error syncing to cloud: ${error.message}`);
-      setToastVariant('danger');
-      setShowToast(true);
+      if (!suppressToast) {
+        setToastMessage(`Error syncing to cloud: ${error.message}`);
+        setToastVariant('danger');
+        setShowToast(true);
+      }
     } finally {
       setIsSyncing(false);
     }
