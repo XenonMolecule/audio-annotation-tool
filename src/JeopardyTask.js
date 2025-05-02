@@ -162,7 +162,7 @@ function JeopardyTask({ config, data, onUpdate, annotations, initialIndex = 0, o
   };
 
   const handleBuzzIn = () => {
-    if (!audioStarted) return;
+    if (!audioStarted || currentAnnotation.answer === 'forfeited') return;
     const now = Date.now();
     const latency = now - questionStartTime;
     setBuzzLatency(latency);
@@ -209,10 +209,11 @@ function JeopardyTask({ config, data, onUpdate, annotations, initialIndex = 0, o
       buzzTime,
       buzzLatency,
       recording: recordingUrl,
-      originalRecording: originalRecordingUrl || recordingUrl,
+      originalRecording: currentAnnotation.answer === 'forfeited' ? 'forfeit' : 
+                        (originalRecordingUrl || recordingUrl),
       reRecordingCount: hasReportedIssue ? (currentAnnotation.reRecordingCount || 0) + 1 : 0,
       audioLength,
-      answer: "recorded",
+      answer: currentAnnotation.answer === 'forfeited' ? 'forfeited' : "recorded",
       metadata: {
         ...metadata,
         timestamp: Date.now()
@@ -460,6 +461,9 @@ function JeopardyTask({ config, data, onUpdate, annotations, initialIndex = 0, o
       <Card.Header>
         <h5 className="mb-0">
           Jeopardy Task - Row {currentIndex + 1} of {data.length}
+          {currentAnnotation.answer === 'forfeited' && (
+            <span className="badge bg-danger ms-2">Forfeited</span>
+          )}
         </h5>
       </Card.Header>
 
@@ -515,6 +519,32 @@ function JeopardyTask({ config, data, onUpdate, annotations, initialIndex = 0, o
                     onClick={handleReportIssue}
                   >
                     Report Audio Issue
+                  </Button>
+                </div>
+              ) : (
+                <div className="mt-3">
+                  <AudioRecorder
+                    ref={audioRecorderRef}
+                    onRecordingComplete={handleRecordingComplete}
+                    allowReRecording={true}
+                    initialDelay={500}
+                  />
+                </div>
+              )}
+            </div>
+          ) : currentAnnotation.answer === 'forfeited' ? (
+            <div className="mb-3">
+              <div className="alert alert-danger text-center mb-3">
+                <h5>Question Forfeited</h5>
+                <p className="mb-0">You cannot attempt this question again.</p>
+              </div>
+              {!hasReportedIssue ? (
+                <div className="mt-3">
+                  <Button
+                    variant="outline-warning"
+                    onClick={handleReportIssue}
+                  >
+                    Report Issue
                   </Button>
                 </div>
               ) : (
