@@ -1,5 +1,5 @@
 import React, { useState, useRef, useMemo, useEffect } from 'react';
-import { Card, Button, Alert } from 'react-bootstrap';
+import { Card, Button, Alert, Modal } from 'react-bootstrap';
 import { ref, getDownloadURL } from 'firebase/storage';
 import { storage } from './firebase';
 import AudioRecorder from './components/AudioRecorder';
@@ -24,6 +24,8 @@ function JeopardyTask({ config, data, onUpdate, annotations, initialIndex = 0, o
   const [showAudioRecorder, setShowAudioRecorder] = useState(false);
   const [isAudioRecorderInitialized, setIsAudioRecorderInitialized] = useState(false);
   const [shouldAutoStartRecording, setShouldAutoStartRecording] = useState(false);
+  const [showForfeitModal, setShowForfeitModal] = useState(false);
+  const [pendingNavigation, setPendingNavigation] = useState(null);
 
   const audioRef = useRef(null);
   const timerRef = useRef(null);
@@ -31,16 +33,13 @@ function JeopardyTask({ config, data, onUpdate, annotations, initialIndex = 0, o
 
   // Debug logging for component lifecycle
   useEffect(() => {
-    console.log('JeopardyTask mounted/updated');
-    console.log('Current state:', {
-      isRecordingComplete,
-      hasReportedIssue,
-      buzzed,
-      reRecordingCount,
-      showAudioRecorder,
-      isAudioRecorderInitialized
-    });
-  }, [isRecordingComplete, hasReportedIssue, buzzed, reRecordingCount, showAudioRecorder, isAudioRecorderInitialized]);
+    console.log('JeopardyTask state update:', { currentIndex, initialIndex });
+  }, [isRecordingComplete, hasReportedIssue, buzzed, reRecordingCount, showAudioRecorder, isAudioRecorderInitialized, currentIndex, initialIndex]);
+
+  // Initialize currentIndex from initialIndex prop
+  useEffect(() => {
+    setCurrentIndex(initialIndex);
+  }, [initialIndex]);
 
   // Separate effect to handle AudioRecorder mounting and initialization
   useEffect(() => {
@@ -203,14 +202,9 @@ function JeopardyTask({ config, data, onUpdate, annotations, initialIndex = 0, o
   };
 
   const handleRecordingComplete = async (recordingUrl) => {
-    console.log('handleRecordingComplete called with URL:', recordingUrl);
-    console.log('Current state:', {
-      buzzTime,
-      buzzLatency,
-      reRecordingCount,
-      originalRecordingUrl
-    });
+    console.log('Recording complete - pre state update:', { currentIndex, initialIndex });
     
+    // Create the updated annotation
     const updatedAnnotation = {
       buzzTime,
       buzzLatency,
@@ -225,12 +219,21 @@ function JeopardyTask({ config, data, onUpdate, annotations, initialIndex = 0, o
       }
     };
     
-    console.log('Updating annotation with:', updatedAnnotation);
+    // Update local state first
     setIsRecordingComplete(true);
     setBuzzed(true);
     setHasReportedIssue(false);
+    
+    // Then update the annotation
     await onUpdate(currentIndex, updatedAnnotation);
-    if (onSync) await onSync();
+    console.log('Recording complete - post state update:', { currentIndex, initialIndex });
+    
+    // Only sync if explicitly requested
+    if (onSync) {
+      await onSync();
+    }
+    
+    return false; // Prevent auto-navigation
   };
 
   // Refresh local state when moving to a new row or when annotations change
@@ -243,57 +246,120 @@ function JeopardyTask({ config, data, onUpdate, annotations, initialIndex = 0, o
     setHasReportedIssue(false);
   }, [currentAnnotation]);
 
-  // Forfeit handling helper
-  const maybeForfeit = async () => {
-    if (questionStartTime && !buzzed) {
-      const confirmLeave = window.confirm(
-        'You have started listening but not buzzed in. Leaving will forfeit this question. Continue?'
-      );
-      if (!confirmLeave) return false;
-      // Record forfeited annotation
-      const forfeitedAnnotation = {
-        buzzTime: null,
-        buzzLatency: -1,
-        recording: null,
-        originalRecording: null,
-        reRecordingCount: 0,
-        audioLength: null,
-        answer: 'forfeited',
-        metadata: {
-          ...metadata,
-          timestamp: Date.now()
-        }
-      };
-      await onUpdate(currentIndex, forfeitedAnnotation);
-      if (onSync) await onSync();
-    }
-    return true;
+  // Enhanced navigation prevention and task switching detection
+  useEffect(() => {
+    let isUnmounting = false;
+
+    const handleBeforeUnload = (e) => {
+      if (questionStartTime && !buzzed) {
+        e.preventDefault();
+        // Note: Modern browsers may ignore this custom message and show their own generic message,
+        // but we'll provide a detailed one for browsers that do show it
+        e.returnValue = '⚠️ FORFEIT WARNING: You are in the middle of a Jeopardy question! Leaving now will count as a forfeit and you cannot attempt this question again. Click "Stay" to continue or "Leave" to forfeit.';
+      }
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.hidden && questionStartTime && !buzzed) {
+        // User switched tabs or minimized window
+        const forfeitedAnnotation = {
+          buzzTime: null,
+          buzzLatency: -1,
+          recording: null,
+          originalRecording: null,
+          reRecordingCount: 0,
+          audioLength: null,
+          answer: 'forfeited',
+          metadata: {
+            ...metadata,
+            timestamp: Date.now(),
+            forfeitReason: 'tab_switch'
+          }
+        };
+        onUpdate(currentIndex, forfeitedAnnotation);
+        if (onSync) onSync();
+      }
+    };
+
+    // Handle task switching and page refreshes
+    const handleForfeit = (reason) => {
+      if (questionStartTime && !buzzed && !isUnmounting) {
+        const forfeitedAnnotation = {
+          buzzTime: null,
+          buzzLatency: -1,
+          recording: null,
+          originalRecording: null,
+          reRecordingCount: 0,
+          audioLength: null,
+          answer: 'forfeited',
+          metadata: {
+            ...metadata,
+            timestamp: Date.now(),
+            forfeitReason: reason
+          }
+        };
+        onUpdate(currentIndex, forfeitedAnnotation);
+        if (onSync) onSync();
+      }
+    };
+
+    // Set up event listeners
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    // Handle task switching by checking if we're still mounted
+    const checkMountStatus = () => {
+      if (questionStartTime && !buzzed) {
+        handleForfeit('task_switch');
+      }
+    };
+
+    // Check mount status periodically
+    const mountCheckInterval = setInterval(checkMountStatus, 1000);
+
+    // Cleanup function
+    return () => {
+      isUnmounting = true;
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      clearInterval(mountCheckInterval);
+      // Handle cleanup forfeit
+      handleForfeit('component_unmount');
+    };
+  }, [questionStartTime, buzzed, currentIndex, metadata, onUpdate, onSync]);
+
+  const handleForfeitCancel = () => {
+    setShowForfeitModal(false);
+    setPendingNavigation(null);
   };
 
   const goNext = async () => {
-    console.log('goNext called, currentIndex:', currentIndex);
+    console.log('Navigation attempt:', { currentIndex, initialIndex });
+    
     if (currentIndex < data.length - 1) {
-      const ok = await maybeForfeit();
-      if (!ok) return;
+      if (questionStartTime && !buzzed) {
+        setPendingNavigation('next');
+        setShowForfeitModal(true);
+        return;
+      }
 
-      // If we have a recording, update the annotation to mark it as complete
-      if (currentAnnotation.recording) {
-        console.log('Updating annotation to completed state');
-        const finalAnnotation = {
+      // If we have a recording but haven't marked it complete, mark it complete and move on
+      if (currentAnnotation.recording && currentAnnotation.answer === "recorded") {
+        const completeAnnotation = {
           ...currentAnnotation,
-          answer: "completed", // Mark as fully complete when moving to next question
+          answer: "complete",
           metadata: {
             ...metadata,
             timestamp: Date.now()
           }
         };
-        await onUpdate(currentIndex, finalAnnotation);
+        await onUpdate(currentIndex, completeAnnotation);
         if (onSync) await onSync();
       }
 
-      console.log('Moving to next index:', currentIndex + 1);
       setCurrentIndex(currentIndex + 1);
-      // Reset local states; useEffect on currentAnnotation will resync
+      
+      // Reset local states
       setQuestionStartTime(null);
       setTimer(0);
       setIsTimerRunning(false);
@@ -303,13 +369,76 @@ function JeopardyTask({ config, data, onUpdate, annotations, initialIndex = 0, o
       setBuzzed(false);
       setIsRecordingComplete(false);
     }
+  };
+
+  const handleForfeitConfirm = async () => {
+    if (pendingNavigation) {
+      if (questionStartTime && !buzzed) {
+        // Record forfeited annotation
+        const forfeitedAnnotation = {
+          buzzTime: null,
+          buzzLatency: -1,
+          recording: null,
+          originalRecording: null,
+          reRecordingCount: 0,
+          audioLength: null,
+          answer: 'forfeited',
+          metadata: {
+            ...metadata,
+            timestamp: Date.now(),
+            forfeitReason: 'question_navigation'
+          }
+        };
+        await onUpdate(currentIndex, forfeitedAnnotation);
+      }
+
+      if (onSync) await onSync();
+
+      // Perform the navigation
+      if (pendingNavigation === 'next') {
+        setCurrentIndex(currentIndex + 1);
+      } else if (pendingNavigation === 'prev') {
+        setCurrentIndex(currentIndex - 1);
+      }
+
+      // Reset states
+      setQuestionStartTime(null);
+      setTimer(0);
+      setIsTimerRunning(false);
+      setAudioStarted(false);
+      setAudioLength(null);
+      setHasReportedIssue(false);
+      setBuzzed(false);
+      setIsRecordingComplete(false);
+    }
+    setShowForfeitModal(false);
+    setPendingNavigation(null);
   };
 
   const goPrev = async () => {
+    console.log('=== goPrev START ===');
+    console.log('Current state:', {
+      currentIndex,
+      questionStartTime,
+      buzzed,
+      isRecordingComplete,
+      showForfeitModal,
+      pendingNavigation
+    });
+    
     if (currentIndex > 0) {
-      const ok = await maybeForfeit();
-      if (!ok) return;
+      if (questionStartTime && !buzzed) {
+        console.log('Showing forfeit modal');
+        setPendingNavigation('prev');
+        setShowForfeitModal(true);
+        return;
+      }
+
+      console.log('Moving to previous question');
       setCurrentIndex(currentIndex - 1);
+      
+      // Reset local states
+      console.log('Resetting states');
       setQuestionStartTime(null);
       setTimer(0);
       setIsTimerRunning(false);
@@ -319,54 +448,15 @@ function JeopardyTask({ config, data, onUpdate, annotations, initialIndex = 0, o
       setBuzzed(false);
       setIsRecordingComplete(false);
     }
+    console.log('=== goPrev END ===');
   };
-
-  useEffect(() => {
-    const handleBeforeUnload = (e) => {
-      if (questionStartTime && !buzzed) {
-        e.preventDefault();
-        e.returnValue = '';
-      }
-    };
-    window.addEventListener('beforeunload', handleBeforeUnload);
-    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
-  }, [questionStartTime, buzzed]);
-
-  // On mount, if questionStartTime was set but not buzzed, save a forfeited annotation
-  useEffect(() => {
-    if (questionStartTime && !buzzed) {
-      const forfeitedAnnotation = {
-        buzzTime: null,
-        buzzLatency: -1,
-        recording: null,
-        originalRecording: null,
-        reRecordingCount: 0,
-        audioLength: null,
-        answer: "forfeited",
-        metadata: {
-          ...metadata,
-          timestamp: Date.now()
-        }
-      };
-      onUpdate(currentIndex, forfeitedAnnotation);
-      if (onSync) onSync();
-    }
-    // Only run on mount
-    // eslint-disable-next-line
-  }, []);
-
-  // Update currentIndex when initialIndex prop changes (e.g., after loading annotations)
-  useEffect(() => {
-    console.log('Initial index changed:', initialIndex);
-    setCurrentIndex(initialIndex);
-  }, [initialIndex]);
 
   if (!currentRow) {
     return <h5>Loading task data...</h5>;
   }
 
   return (
-    <Card className="mb-3">
+    <Card className="mb-3 jeopardy-task">
       <Card.Header>
         <h5 className="mb-0">
           Jeopardy Task - Row {currentIndex + 1} of {data.length}
@@ -397,6 +487,7 @@ function JeopardyTask({ config, data, onUpdate, annotations, initialIndex = 0, o
                 onPlay={handleAudioPlay}
                 onPause={handleAudioPause}
                 onLoadedMetadata={handleAudioLoadedMetadata}
+                data-question-start-time={questionStartTime || ''}
               >
                 <source src={audioUrl} type="audio/mp3" />
                 Your browser does not support the audio element.
@@ -422,7 +513,6 @@ function JeopardyTask({ config, data, onUpdate, annotations, initialIndex = 0, o
                   <Button
                     variant="outline-warning"
                     onClick={handleReportIssue}
-                    className="w-100"
                   >
                     Report Audio Issue
                   </Button>
@@ -443,9 +533,10 @@ function JeopardyTask({ config, data, onUpdate, annotations, initialIndex = 0, o
               variant="danger"
               onClick={handleBuzzIn}
               size="lg"
-              className="w-100"
+              className="w-100 buzz-button"
               disabled={!audioStarted || isRecordingComplete}
               style={{ opacity: audioStarted ? 1 : 0.5 }}
+              data-buzzed={buzzed}
             >
               Buzz In!
             </Button>
@@ -482,6 +573,32 @@ function JeopardyTask({ config, data, onUpdate, annotations, initialIndex = 0, o
           </Button>
         </div>
       </Card.Body>
+
+      {/* Forfeit Warning Modal */}
+      <Modal show={showForfeitModal} onHide={handleForfeitCancel} centered>
+        <Modal.Header closeButton>
+          <Modal.Title>⚠️ Warning: Active Jeopardy Question</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          <div className="text-center mb-4">
+            <i className="fas fa-exclamation-triangle fa-3x text-warning mb-3"></i>
+            <h5>You have started listening to this Jeopardy question but not buzzed in yet.</h5>
+          </div>
+          <div className="alert alert-warning">
+            <p className="mb-0">
+              If you proceed, you will forfeit this question and cannot attempt it again.
+            </p>
+          </div>
+        </Modal.Body>
+        <Modal.Footer>
+          <Button variant="secondary" onClick={handleForfeitCancel}>
+            Cancel
+          </Button>
+          <Button variant="danger" onClick={handleForfeitConfirm}>
+            Forfeit Question
+          </Button>
+        </Modal.Footer>
+      </Modal>
     </Card>
   );
 }

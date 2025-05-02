@@ -178,42 +178,46 @@ function AppContent({
   const [activeTaskIndex, setActiveTaskIndex] = useState(0);
   const [isSingleTaskMode, setIsSingleTaskMode] = useState(false);
   const [initialTaskIndices, setInitialTaskIndices] = useState({});
+  const [showForfeitWarning, setShowForfeitWarning] = useState(false);
+  const [pendingNavigation, setPendingNavigation] = useState(null);
 
   // Find first unannotated item for a task (only used for initial load)
   const findFirstUnannotatedIndex = useCallback((taskId) => {
     const taskData = datasets[taskId] || [];
     const taskAnnotations = annotations[taskId] || {};
     
-    console.log('findFirstUnannotatedIndex called for task:', taskId);
-    console.log('Current annotations:', taskAnnotations);
+    // If no annotations exist, return 0
+    if (Object.keys(taskAnnotations).length === 0) {
+      return 0;
+    }
     
     for (let i = 0; i < taskData.length; i++) {
       const annotation = taskAnnotations[i];
+      
       if (!annotation) {
-        console.log('Found unannotated index (no annotation):', i);
+        console.log('Found unannotated index:', { taskId, index: i });
         return i;
       }
       
       // Check for task-specific completion
       if (taskId === 'werewolf' && !annotation.selected) {
-        console.log('Found unannotated index (werewolf not selected):', i);
+        console.log('Found unannotated index:', { taskId, index: i });
         return i;
       }
       if (taskId === 'pronunciation' && !annotation.recording) {
-        console.log('Found unannotated index (pronunciation no recording):', i);
+        console.log('Found unannotated index:', { taskId, index: i });
         return i;
       }
       if (taskId === 'emotion' && !annotation.emotion) {
-        console.log('Found unannotated index (emotion not set):', i);
+        console.log('Found unannotated index:', { taskId, index: i });
         return i;
       }
-      // For jeopardy, consider it annotated if it has a recording, regardless of answer state
-      if (taskId === 'jeopardy' && !annotation.recording) {
-        console.log('Found unannotated index (jeopardy no recording):', i);
+      // For jeopardy, consider it annotated if it has a recording AND an answer
+      if (taskId === 'jeopardy' && (!annotation.recording || (annotation.answer !== 'complete' && annotation.answer !== 'forfeited'))) {
+        console.log('Found unannotated index:', { taskId, index: i });
         return i;
       }
     }
-    console.log('No unannotated indices found, returning last index');
     return taskData.length - 1; // Return last index if all are annotated
   }, [datasets, annotations]);
 
@@ -231,11 +235,9 @@ function AppContent({
       if (taskIndex !== -1) {
         setActiveTaskIndex(taskIndex);
       } else {
-        // If taskId is invalid, default to first task
         setActiveTaskIndex(0);
       }
     } else {
-      // If no taskId in query, default to first task
       setActiveTaskIndex(0);
     }
 
@@ -244,33 +246,29 @@ function AppContent({
     if (pathParts.length > 2) {
       const pathTaskId = pathParts[2];
       if (pathTaskId) {
-        const params = new URLSearchParams(window.location.search);
-        params.set('task', pathTaskId);
-        navigate(`/audio-annotation-tool?${params.toString()}`, { replace: true });
+        const params2 = new URLSearchParams(window.location.search);
+        params2.set('task', pathTaskId);
+        navigate(`/audio-annotation-tool?${params2.toString()}`, { replace: true });
       }
     }
 
-    // Initialize task indices
+    // Initialize task indices once when datasets or tasks change
     const indices = {};
     config.tasks.forEach(task => {
       indices[task.id] = findFirstUnannotatedIndex(task.id);
     });
     setInitialTaskIndices(indices);
-  }, [config.tasks, navigate, datasets, annotations, findFirstUnannotatedIndex]); // Add findFirstUnannotatedIndex to dependencies
+  }, [config.tasks, navigate, datasets, findFirstUnannotatedIndex]);
 
-  // Initialize task indices
+  // Initialize task indices when annotations change
   useEffect(() => {
-    const initializeTaskIndices = async () => {
-      if (!datasets || !annotations) return;
-      
-      const newTaskIndices = {};
-      for (const [taskId] of Object.entries(datasets)) {
-        newTaskIndices[taskId] = findFirstUnannotatedIndex(taskId);
-      }
-      setInitialTaskIndices(newTaskIndices);
-    };
-
-    initializeTaskIndices();
+    if (!datasets || !annotations) return;
+    
+    const newTaskIndices = {};
+    for (const [taskId] of Object.entries(datasets)) {
+      newTaskIndices[taskId] = findFirstUnannotatedIndex(taskId);
+    }
+    setInitialTaskIndices(newTaskIndices);
   }, [datasets, annotations, findFirstUnannotatedIndex]);
 
   // Generate or retrieve user ID
@@ -362,6 +360,31 @@ function AppContent({
   const handleTaskNavigation = async (taskId, index) => {
     if (isSingleTaskMode) return; // Disable navigation in single-task mode
     
+    // Check if we're currently in a jeopardy task with an active question
+    if (activeTask.type === 'jeopardy') {
+      // Get the current jeopardy task component
+      const jeopardyTask = document.querySelector('.jeopardy-task');
+      if (jeopardyTask) {
+        // Check if there's an active question (has questionStartTime but no buzzTime)
+        const questionStartTime = jeopardyTask.querySelector('audio')?.dataset.questionStartTime;
+        const buzzed = jeopardyTask.querySelector('.buzz-button')?.dataset.buzzed === 'true';
+        
+        if (questionStartTime && !buzzed) {
+          // Store the pending navigation
+          setPendingNavigation({ taskId, index });
+          // Show the custom warning modal
+          setShowForfeitWarning(true);
+          return;
+        }
+      }
+    }
+    
+    // If no active question or not jeopardy, proceed with navigation
+    await performNavigation(taskId, index);
+  };
+
+  // Perform the actual navigation
+  const performNavigation = async (taskId, index) => {
     // Sync current task before switching
     if (activeTask) {
       await syncToCloud(activeTask.id);
@@ -375,14 +398,62 @@ function AppContent({
     navigate(`${baseUrl}?${params.toString()}`);
   };
 
+  // Handle forfeit confirmation
+  const handleForfeitConfirm = async () => {
+    if (pendingNavigation) {
+      // Record forfeited annotation
+      const jeopardyAnnotations = annotations[activeTask.id] || {};
+      const currentJeopardyAnnotation = jeopardyAnnotations[initialTaskIndices[activeTask.id]] || {};
+      
+      const forfeitedAnnotation = {
+        ...currentJeopardyAnnotation,
+        buzzTime: null,
+        buzzLatency: -1,
+        recording: null,
+        originalRecording: null,
+        reRecordingCount: 0,
+        audioLength: null,
+        answer: 'forfeited',
+        metadata: {
+          ...currentJeopardyAnnotation.metadata,
+          timestamp: Date.now(),
+          forfeitReason: 'task_switch'
+        }
+      };
+      
+      // Update the annotation
+      setAnnotations(prev => ({
+        ...prev,
+        [activeTask.id]: {
+          ...prev[activeTask.id],
+          [initialTaskIndices[activeTask.id]]: forfeitedAnnotation
+        }
+      }));
+      
+      // Sync the forfeit
+      await syncToCloud(activeTask.id);
+      
+      // Perform the navigation
+      await performNavigation(pendingNavigation.taskId, pendingNavigation.index);
+    }
+    
+    // Reset state
+    setShowForfeitWarning(false);
+    setPendingNavigation(null);
+  };
+
+  // Handle forfeit cancellation
+  const handleForfeitCancel = () => {
+    setShowForfeitWarning(false);
+    setPendingNavigation(null);
+  };
+
   // Handle annotation update
   const handleAnnotationUpdate = async (taskId, rowIndex, data) => {
-    console.log('handleAnnotationUpdate called:', { taskId, rowIndex, data });
+    console.log('Annotation update:', { taskId, rowIndex, answer: data.answer });
     setAnnotations((prev) => {
       const taskAnnotations = prev[taskId] || {};
       const updated = { ...prev, [taskId]: { ...taskAnnotations, [rowIndex]: data } };
-      
-      console.log('Updated annotations:', updated);
       
       // Save to localStorage
       localStorage.setItem('annotations', JSON.stringify(updated));
@@ -505,6 +576,32 @@ function AppContent({
         <Modal.Footer>
           <Button variant="secondary" onClick={() => setShowInstructions(false)}>
             Close
+          </Button>
+        </Modal.Footer>
+      </Modal>
+
+      {/* Forfeit Warning Modal */}
+      <Modal show={showForfeitWarning} onHide={handleForfeitCancel} centered>
+        <Modal.Header closeButton>
+          <Modal.Title>⚠️ Warning: Active Jeopardy Question</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          <div className="text-center mb-4">
+            <i className="fas fa-exclamation-triangle fa-3x text-warning mb-3"></i>
+            <h5>You have started listening to this Jeopardy question but not buzzed in yet.</h5>
+          </div>
+          <div className="alert alert-warning">
+            <p className="mb-0">
+              If you proceed, you will <strong>forfeit</strong> this question and cannot attempt it again.
+            </p>
+          </div>
+        </Modal.Body>
+        <Modal.Footer>
+          <Button variant="secondary" onClick={handleForfeitCancel}>
+            Cancel
+          </Button>
+          <Button variant="danger" onClick={handleForfeitConfirm}>
+            Forfeit Question
           </Button>
         </Modal.Footer>
       </Modal>
