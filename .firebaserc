@@ -1,0 +1,8 @@
+{
+  "projects": {
+    "default": "hai-gcp-accents-dialects",
+    "prod": "hai-gcp-accents-dialects"
+  },
+  "targets": {},
+  "etags": {}
+}

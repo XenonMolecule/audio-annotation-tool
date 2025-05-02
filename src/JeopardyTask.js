@@ -4,7 +4,7 @@ import { ref, getDownloadURL } from 'firebase/storage';
 import { storage } from './firebase';
 import AudioRecorder from './components/AudioRecorder';
 
-function JeopardyTask({ config, data, onUpdate, annotations, initialIndex = 0, onSync }) {
+function JeopardyTask({ config, data, onUpdate, annotations, initialIndex = 0, onSync, isAdminMode }) {
   const [currentIndex, setCurrentIndex] = useState(initialIndex);
   const [buzzLatency, setBuzzLatency] = useState(null);
   const [questionStartTime, setQuestionStartTime] = useState(null);
@@ -567,86 +567,103 @@ function JeopardyTask({ config, data, onUpdate, annotations, initialIndex = 0, o
         )}
 
         {/* Recording controls */}
-        <div className="mb-3">
-          {isRecordingComplete || currentAnnotation.recording ? (
-            // Completed recording playback
-            <div className="mb-3">
-              <div className="mb-2 text-center text-muted">Your Recording</div>
-              <audio controls src={currentAnnotation.recording} style={{ width: '100%' }} />
-              {currentAnnotation.reRecordingCount > 0 && !hasReportedIssue && (
-                <div className="mt-2 text-center text-muted">
-                  Re-recorded {currentAnnotation.reRecordingCount} time{(currentAnnotation.reRecordingCount) !== 1 ? 's' : ''}
-                </div>
-              )}
-              {!hasReportedIssue ? (
-                <div className="mt-3">
-                  <Button
-                    variant="outline-warning"
-                    onClick={handleReportIssue}
-                  >
-                    Report Audio Issue
-                  </Button>
-                </div>
-              ) : (
-                <div className="mt-3">
-                  <AudioRecorder
-                    ref={audioRecorderRef}
-                    onRecordingComplete={handleRecordingComplete}
-                    allowReRecording={true}
-                    initialDelay={500}
-                  />
-                </div>
-              )}
-            </div>
-          ) : currentAnnotation.answer === 'forfeited' ? (
-            <div className="mb-3">
-              <div className="alert alert-danger text-center mb-3">
-                <h5>Question Forfeited</h5>
-                <p className="mb-0">You cannot attempt this question again.</p>
+        {!isAdminMode && (
+          <div className="mb-3">
+            {/* Normal mode: full interactive recording and buzz UI */}
+            {isRecordingComplete || currentAnnotation.recording ? (
+              /* Completed recording playback */
+              <div className="mb-3">
+                <div className="mb-2 text-center text-muted">Your Recording</div>
+                <audio controls src={currentAnnotation.recording} style={{ width: '100%' }} />
+                {currentAnnotation.reRecordingCount > 0 && !hasReportedIssue && (
+                  <div className="mt-2 text-center text-muted">
+                    Re-recorded {currentAnnotation.reRecordingCount} time{currentAnnotation.reRecordingCount !== 1 ? 's' : ''}
+                  </div>
+                )}
+                {!hasReportedIssue ? (
+                  <div className="mt-3">
+                    <Button variant="outline-warning" onClick={handleReportIssue}>
+                      Report Audio Issue
+                    </Button>
+                  </div>
+                ) : (
+                  <div className="mt-3">
+                    <AudioRecorder
+                      ref={audioRecorderRef}
+                      onRecordingComplete={handleRecordingComplete}
+                      allowReRecording={true}
+                      initialDelay={500}
+                    />
+                  </div>
+                )}
               </div>
-              {!hasReportedIssue ? (
-                <div className="mt-3">
-                  <Button
-                    variant="outline-warning"
-                    onClick={handleReportIssue}
-                  >
-                    Report Issue
-                  </Button>
+            ) : currentAnnotation.answer === 'forfeited' ? (
+              /* Forfeited state */
+              <div className="mb-3">
+                <div className="alert alert-danger text-center mb-3">
+                  <h5>Question Forfeited</h5>
+                  <p className="mb-0">You cannot attempt this question again.</p>
                 </div>
-              ) : (
-                <div className="mt-3">
-                  <AudioRecorder
-                    ref={audioRecorderRef}
-                    onRecordingComplete={handleRecordingComplete}
-                    allowReRecording={true}
-                    initialDelay={500}
-                  />
-                </div>
-              )}
-            </div>
-          ) : !buzzed ? (
-            <Button
-              variant="danger"
-              onClick={handleBuzzIn}
-              size="lg"
-              className="w-100 buzz-button"
-              disabled={!audioStarted || isRecordingComplete}
-              style={{ opacity: audioStarted ? 1 : 0.5 }}
-              data-buzzed={buzzed}
-            >
-              Buzz In!
-            </Button>
-          ) : (
-            <div className="mb-3">
-              <AudioRecorder
-                ref={audioRecorderRef}
-                onRecordingComplete={handleRecordingComplete}
-                allowReRecording={true}
-                initialDelay={500}
-              />
-            </div>
-          )}
-        </div>
+                {!hasReportedIssue ? (
+                  <div className="mt-3">
+                    <Button variant="outline-warning" onClick={handleReportIssue}>
+                      Report Issue
+                    </Button>
+                  </div>
+                ) : (
+                  <div className="mt-3">
+                    <AudioRecorder
+                      ref={audioRecorderRef}
+                      onRecordingComplete={handleRecordingComplete}
+                      allowReRecording={true}
+                      initialDelay={500}
+                    />
+                  </div>
+                )}
+              </div>
+            ) : !buzzed ? (
+              /* Buzz in button */
+              <Button
+                variant="danger"
+                onClick={handleBuzzIn}
+                size="lg"
+                className="w-100 buzz-button"
+                disabled={!audioStarted || isRecordingComplete}
+                style={{ opacity: audioStarted ? 1 : 0.5 }}
+                data-buzzed={buzzed}
+              >
+                Buzz In!
+              </Button>
+            ) : (
+              /* Recording after buzz */
+              <div className="mb-3">
+                <AudioRecorder
+                  ref={audioRecorderRef}
+                  onRecordingComplete={handleRecordingComplete}
+                  allowReRecording={true}
+                  initialDelay={500}
+                />
+              </div>
+            )}
+          </div>
+        )}
+        {isAdminMode && (
+          <div className="mb-3">
+            {currentAnnotation.recording ? (
+              <>
+                <div className="mb-2 text-center text-muted">User Recording</div>
+                <audio controls src={currentAnnotation.recording} style={{ width: '100%' }} />
+                {currentAnnotation.reRecordingCount > 0 && (
+                  <div className="mt-2 text-center text-muted">
+                    Re-recorded {currentAnnotation.reRecordingCount} time{currentAnnotation.reRecordingCount !== 1 ? 's' : ''}
+                  </div>
+                )}
+              </>
+            ) : (
+              <Alert variant="info">No recording available</Alert>
+            )}
+          </div>
+        )}
 
         {/* Centered pagination */}
         <div className="d-flex justify-content-center align-items-center mt-4">

@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Container, Navbar, Nav, Button, Modal, Toast, ToastContainer } from 'react-bootstrap';
-import { BrowserRouter as Router, Routes, Route, useNavigate } from 'react-router-dom';
+import { Container, Navbar, Nav, NavDropdown, Button, Modal, Toast, ToastContainer, Form } from 'react-bootstrap';
+import { BrowserRouter as Router, Routes, Route, useNavigate, useLocation } from 'react-router-dom';
 import yaml from 'js-yaml';
 import ReactMarkdown from 'react-markdown';
-import { ref, uploadString } from 'firebase/storage';
+import { ref, uploadString, getDownloadURL, listAll } from 'firebase/storage';
 import { storage } from './firebase';
 
 import WerewolfTask from './WerewolfTask';
@@ -181,6 +181,105 @@ function AppContent({
   const [showForfeitWarning, setShowForfeitWarning] = useState(false);
   const [pendingNavigation, setPendingNavigation] = useState(null);
 
+  // Extract query params
+  const location = useLocation();
+  const params = new URLSearchParams(location.search);
+  const initialAdminMode = params.get('mode') === 'admin';
+  const [isAdminMode, setIsAdminMode] = useState(initialAdminMode);
+  const [adminPasswordValid, setAdminPasswordValid] = useState(() => {
+    return localStorage.getItem('adminPasswordValid') === 'true';
+  });
+  const [showAdminPasswordModal, setShowAdminPasswordModal] = useState(isAdminMode && !adminPasswordValid);
+  const [adminPasswordInput, setAdminPasswordInput] = useState('');
+  const [adminUserList, setAdminUserList] = useState([]);
+  const [selectedAdminUser, setSelectedAdminUser] = useState(null);
+  const [adminBackupDone, setAdminBackupDone] = useState(false);
+
+  // --- ALL useEffect HOOKS AT THE TOP, BEFORE ANY RETURN ---
+  // 1. On entering admin mode, save current userId
+  useEffect(() => {
+    if (isAdminMode && !localStorage.getItem('adminOriginalUserId')) {
+      const userId = localStorage.getItem('annotationUserId');
+      if (userId) {
+        localStorage.setItem('adminOriginalUserId', userId);
+      }
+    }
+  }, [isAdminMode]);
+
+  // 2. On exit from admin mode or on page load if not in admin mode, restore original userId and reload their data
+  useEffect(() => {
+    const restoreOriginalUser = async () => {
+      const originalUserId = localStorage.getItem('adminOriginalUserId');
+      if (!isAdminMode && originalUserId) {
+        // Restore userId
+        localStorage.setItem('annotationUserId', originalUserId);
+        // Load that user's annotation data from Firebase
+        const newAnnotations = {};
+        for (const task of config.tasks) {
+          try {
+            const url = await getDownloadURL(ref(storage, `annotations/${originalUserId}/${task.id}.json`));
+            const res = await fetch(url);
+            const text = await res.text();
+            newAnnotations[task.id] = JSON.parse(text);
+          } catch (err) {
+            console.warn(`[AdminMode Restore] No data for ${task.id}:`, err);
+            newAnnotations[task.id] = {};
+          }
+        }
+        setAnnotations(newAnnotations);
+        localStorage.setItem('annotations', JSON.stringify(newAnnotations));
+        localStorage.removeItem('adminOriginalUserId');
+        localStorage.removeItem('adminPasswordValid');
+        setAdminPasswordInput('');
+        setSelectedAdminUser(null);
+        setAdminBackupDone(false);
+        console.log('[AdminMode Restore] Restored original user data from Firebase.');
+      }
+    };
+    restoreOriginalUser();
+    // Only run on mount and when isAdminMode changes
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAdminMode]);
+
+  useEffect(() => {
+    if (isAdminMode && adminPasswordValid) {
+      if (!adminBackupDone) {
+        const saved = localStorage.getItem('annotations') || '{}';
+        localStorage.setItem('adminBackupAnnotations', saved);
+        setAdminBackupDone(true);
+      }
+      const annotationsRef = ref(storage, 'annotations');
+      listAll(annotationsRef)
+        .then(res => {
+          const ids = res.prefixes.map(p => p.name);
+          setAdminUserList(ids);
+        })
+        .catch(err => console.error('Error listing users:', err));
+    }
+  }, [isAdminMode, adminPasswordValid, adminBackupDone]);
+
+  useEffect(() => {
+    if (isAdminMode && adminPasswordValid && selectedAdminUser) {
+      const loadAll = async () => {
+        const newAnnotations = {};
+        for (const task of config.tasks) {
+          try {
+            const url = await getDownloadURL(ref(storage, `annotations/${selectedAdminUser}/${task.id}.json`));
+            const res = await fetch(url);
+            const text = await res.text();
+            newAnnotations[task.id] = JSON.parse(text);
+          } catch (err) {
+            console.warn(`No data for ${task.id}:`, err);
+            newAnnotations[task.id] = {};
+          }
+        }
+        setAnnotations(newAnnotations);
+        localStorage.setItem('annotations', JSON.stringify(newAnnotations));
+      };
+      loadAll();
+    }
+  }, [selectedAdminUser, isAdminMode, adminPasswordValid, config.tasks, setAnnotations]);
+
   // Find first unannotated item for a task (only used for initial load)
   const findFirstUnannotatedIndex = useCallback((taskId) => {
     const taskData = datasets[taskId] || [];
@@ -322,13 +421,16 @@ function AppContent({
 
   // Sync annotations to cloud
   const syncToCloud = async (taskId, suppressToast = false) => {
+    if (isAdminMode) {
+      // Never sync to cloud in admin mode
+      console.log('[AdminMode] Cloud sync is disabled in admin mode.');
+      return;
+    }
     if (isSyncing) return;
-    
     setIsSyncing(true);
     try {
       const userId = generateUserId();
       const taskAnnotations = annotations[taskId] || {};
-      
       // Log the sync attempt
       console.log('Syncing to cloud:', {
         taskId,
@@ -336,10 +438,8 @@ function AppContent({
         annotationCount: Object.keys(taskAnnotations).length,
         storageBucket: storage.bucket
       });
-      
       const annotationsRef = ref(storage, `annotations/${userId}/${taskId}.json`);
       await uploadString(annotationsRef, JSON.stringify(taskAnnotations), 'raw');
-      
       // Check if we should create a backup
       if (shouldCreateBackup(taskId)) {
         await createBackup(taskId);
@@ -515,10 +615,30 @@ function AppContent({
       TaskComponent = () => <div>Task type not supported</div>;
   }
 
+  // Handle admin password submission
+  const handleAdminPasswordSubmit = () => {
+    if (adminPasswordInput === 'SALT') {
+      localStorage.setItem('adminPasswordValid', 'true');
+      setAdminPasswordValid(true);
+      setShowAdminPasswordModal(false);
+      // trigger backup and user load
+      setIsAdminMode(true);
+    } else {
+      alert('Invalid password');
+    }
+  };
+
+  // Handle navigation to exit admin mode
+  const exitAdminMode = () => {
+    params.delete('mode');
+    navigate(`?${params.toString()}`, { replace: true });
+    setIsAdminMode(false);
+  };
+
   return (
     <>
       <Navbar bg="dark" variant="dark" expand="lg" className="px-4">
-        <Navbar.Brand>Audio Annotation Tool</Navbar.Brand>
+        <Navbar.Brand>Audio Annotation Tool{isAdminMode ? ' (Admin)' : ''}</Navbar.Brand>
         {!isSingleTaskMode && (
           <Nav className="ml-auto">
             {tasks.map((task, index) => (
@@ -530,6 +650,23 @@ function AppContent({
                 {task.id}
               </Nav.Link>
             ))}
+            {isAdminMode && (
+              <NavDropdown title={selectedAdminUser || 'Select User'} id="admin-user-dropdown">
+                <NavDropdown.Item disabled>{'Users:'}</NavDropdown.Item>
+                <Form.Select
+                  size="sm"
+                  value={selectedAdminUser || ''}
+                  onChange={e => setSelectedAdminUser(e.target.value)}
+                >
+                  <option value="" disabled>Select a user</option>
+                  {adminUserList.map(uid => (
+                    <option key={uid} value={uid}>{uid}</option>
+                  ))}
+                </Form.Select>
+                <NavDropdown.Divider />
+                <NavDropdown.Item onClick={exitAdminMode}>Exit Admin Mode</NavDropdown.Item>
+              </NavDropdown>
+            )}
           </Nav>
         )}
       </Navbar>
@@ -549,12 +686,13 @@ function AppContent({
         <TaskComponent
           config={activeTask}
           data={datasets[activeTask.id] || []}
-          onUpdate={(rowIndex, rowData) =>
+          onUpdate={isAdminMode ? () => {} : (rowIndex, rowData) =>
             handleAnnotationUpdate(activeTask.id, rowIndex, rowData)
           }
           annotations={annotations[activeTask.id] || {}}
           initialIndex={initialTaskIndices[activeTask.id] || 0}
-          onSync={() => syncToCloud(activeTask.id)}
+          onSync={isAdminMode ? () => {} : () => syncToCloud(activeTask.id)}
+          isAdminMode={isAdminMode}
         />
 
         <div className="d-flex justify-content-end mt-3">
@@ -606,6 +744,26 @@ function AppContent({
           <Button variant="danger" onClick={handleForfeitConfirm}>
             Forfeit Question
           </Button>
+        </Modal.Footer>
+      </Modal>
+
+      {/* Admin password Modal */}
+      <Modal show={showAdminPasswordModal} backdrop="static" centered>
+        <Modal.Header>
+          <Modal.Title>Enter Admin Password</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          <Form.Group>
+            <Form.Label>Password</Form.Label>
+            <Form.Control
+              type="password"
+              value={adminPasswordInput}
+              onChange={e => setAdminPasswordInput(e.target.value)}
+            />
+          </Form.Group>
+        </Modal.Body>
+        <Modal.Footer>
+          <Button variant="primary" onClick={handleAdminPasswordSubmit}>Submit</Button>
         </Modal.Footer>
       </Modal>
 

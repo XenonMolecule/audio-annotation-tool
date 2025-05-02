@@ -3,7 +3,7 @@ import { Card, Button, Collapse, Form, Alert } from 'react-bootstrap';
 import { ref, getDownloadURL } from 'firebase/storage';
 import { storage } from './firebase';
 
-function WerewolfTask({ config, data, onUpdate, annotations, initialIndex = 0, onSync }) {
+function WerewolfTask({ config, data, onUpdate, annotations, initialIndex = 0, onSync, isAdminMode }) {
   const [currentIndex, setCurrentIndex] = useState(initialIndex);
   const [showSpeakerRename, setShowSpeakerRename] = useState(false);
   const [audioUrl, setAudioUrl] = useState(null);
@@ -141,13 +141,6 @@ function WerewolfTask({ config, data, onUpdate, annotations, initialIndex = 0, o
   const allChoices = [...choices, ...extraChoices];
 
   // Handlers.
-  const goNext = async () => {
-    if (currentIndex < data.length - 1) {
-      if (onSync) await onSync();
-      setCurrentIndex(currentIndex + 1);
-    }
-  };
-
   const goPrev = async () => {
     if (currentIndex > 0) {
       if (onSync) await onSync();
@@ -236,53 +229,65 @@ function WerewolfTask({ config, data, onUpdate, annotations, initialIndex = 0, o
           </div>
         )}
 
-        {/* Speaker renaming dropdown (after transcript and audio, before voting) */}
-        <div className="mb-3">
-          <Button variant="secondary" onClick={() => setShowSpeakerRename(!showSpeakerRename)}>
-            {showSpeakerRename ? "Hide Speaker Rename" : "Show Speaker Rename"}
-          </Button>
-          <Collapse in={showSpeakerRename}>
-            <div className="mt-3">
-              <p style={{ fontStyle: 'italic' }}>
-                [Optional] Rename each speaker (type a new name without brackets). The transcript updates live.
-              </p>
-              {uniqueSpeakers.map((label) => (
-                <div key={label} className="mb-2">
-                  <strong>{label}:</strong>
-                  <Form.Control
-                    type="text"
-                    placeholder="Enter new name"
-                    value={speakerMap[label] || ""}
-                    onChange={(e) => handleSpeakerChange(label, e.target.value)}
-                    style={{ maxWidth: "300px", display: "inline-block", marginLeft: "10px" }}
-                  />
-                </div>
+        {/* Speaker renaming (disabled in admin) */}
+        {!isAdminMode && (
+          <div className="mb-3">
+            <Button variant="secondary" onClick={() => setShowSpeakerRename(!showSpeakerRename)}>
+              {showSpeakerRename ? "Hide Speaker Rename" : "Show Speaker Rename"}
+            </Button>
+            <Collapse in={showSpeakerRename}>
+              <div className="mt-3">
+                <p style={{ fontStyle: 'italic' }}>
+                  [Optional] Rename each speaker (type a new name without brackets). The transcript updates live.
+                </p>
+                {uniqueSpeakers.map((label) => (
+                  <div key={label} className="mb-2">
+                    <strong>{label}:</strong>
+                    <Form.Control
+                      type="text"
+                      placeholder="Enter new name"
+                      value={speakerMap[label] || ""}
+                      onChange={(e) => handleSpeakerChange(label, e.target.value)}
+                      style={{ maxWidth: "300px", display: "inline-block", marginLeft: "10px" }}
+                    />
+                  </div>
+                ))}
+              </div>
+            </Collapse>
+          </div>
+        )}
+
+        {/* Voting choices (hidden in admin, but show user's selection if present) */}
+        {!isAdminMode ? (
+          <div className="mt-3">
+            <p>Please select the most likely werewolf:</p>
+            <div className="d-flex justify-content-center flex-wrap mt-3">
+              {allChoices.map(choice => (
+                <Button
+                  key={choice}
+                  variant={selected === choice ? 'primary' : 'outline-primary'}
+                  onClick={() => handleChoice(choice)}
+                  className="m-2"
+                >
+                  {choice}
+                </Button>
               ))}
             </div>
-          </Collapse>
-        </div>
-
-        {/* Voting choices */}
-        <div className="mt-3">
-          <p>Please select the most likely werewolf:</p>
-          <div className="d-flex justify-content-center flex-wrap mt-3">
-            {allChoices.map(choice => (
-              <Button
-                key={choice}
-                variant={selected === choice ? 'primary' : 'outline-primary'}
-                onClick={() => handleChoice(choice)}
-                className="m-2"
-              >
-                {choice}
-              </Button>
-            ))}
+            {selected && (
+              <p className="mt-2">
+                <strong>Your choice:</strong> {selected}
+              </p>
+            )}
           </div>
-          {selected && (
-            <p className="mt-2">
-              <strong>Your choice:</strong> {selected}
-            </p>
-          )}
-        </div>
+        ) : (
+          selected && (
+            <div className="mt-3">
+              <p className="mt-2">
+                <strong>User's selected werewolf:</strong> {selected}
+              </p>
+            </div>
+          )
+        )}
 
         {/* Pagination */}
         <div className="d-flex justify-content-center align-items-center mt-4">

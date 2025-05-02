@@ -4,11 +4,12 @@ import { ref, getDownloadURL } from 'firebase/storage';
 import { storage } from './firebase';
 import AudioRecorder from './components/AudioRecorder';
 
-function EmotionTask({ config, data, onUpdate, annotations, initialIndex = 0, onSync }) {
+function EmotionTask({ config, data, onUpdate, annotations, initialIndex = 0, onSync, isAdminMode }) {
   const [currentIndex, setCurrentIndex] = useState(initialIndex);
   const [audioUrl, setAudioUrl] = useState(null);
   const [audioError, setAudioError] = useState(null);
   const [isLoadingAudio, setIsLoadingAudio] = useState(false);
+  const audioRecorderRef = useRef(null);
 
   // Compute currentRow using useMemo
   const currentRow = useMemo(() => {
@@ -30,9 +31,8 @@ function EmotionTask({ config, data, onUpdate, annotations, initialIndex = 0, on
     };
   }, [annotations, currentIndex]);
 
-  const { recording, status, metadata } = currentAnnotation;
+  const { status, metadata } = currentAnnotation;
   const [playbackUrl, setPlaybackUrl] = useState(currentAnnotation.recording || null);
-  const audioRecorderRef = useRef(null);
 
   // Reset local state and load persisted recording when row changes
   useEffect(() => {
@@ -81,8 +81,6 @@ function EmotionTask({ config, data, onUpdate, annotations, initialIndex = 0, on
     return <h5>Loading task data...</h5>;
   }
 
-  const choices = Array.isArray(currentRow[config.choice_field]) ? currentRow[config.choice_field] : [];
-
   // Handle recording complete
   const handleRecordingComplete = async (recordingUrl) => {
     setPlaybackUrl(recordingUrl);
@@ -100,6 +98,22 @@ function EmotionTask({ config, data, onUpdate, annotations, initialIndex = 0, on
 
   // Render AudioRecorder or playback UI
   const renderAudioSection = () => {
+    if (isAdminMode) {
+      // In admin mode, disable recording and uploading
+      if (playbackUrl) {
+        return (
+          <div className="playback-controls mb-4">
+            <h6>Playback (Admin Mode):</h6>
+            <audio controls src={playbackUrl} className="w-100" />
+          </div>
+        );
+      }
+      return (
+        <Alert variant="info" className="mb-4">
+          Recording disabled in admin mode
+        </Alert>
+      );
+    }
     if (!playbackUrl) {
       return (
         <div className="mb-4">
@@ -121,10 +135,6 @@ function EmotionTask({ config, data, onUpdate, annotations, initialIndex = 0, on
               variant="warning"
               onClick={() => {
                 setPlaybackUrl(null);
-                if (audioRecorderRef.current && audioRecorderRef.current.resetRecording) {
-                  audioRecorderRef.current.resetRecording();
-                }
-                // Immediately start recording again
                 setTimeout(() => {
                   if (audioRecorderRef.current && audioRecorderRef.current.startRecording) {
                     audioRecorderRef.current.startRecording();

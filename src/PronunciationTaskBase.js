@@ -3,7 +3,7 @@ import { Card, Button, ProgressBar, ToastContainer, Toast, Alert } from 'react-b
 import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
 import { storage } from './firebase';
 
-function PronunciationTaskBase({ config, data, onUpdate, annotations, initialIndex = 0, onSync }) {
+function PronunciationTaskBase({ config, data, onUpdate, annotations, initialIndex = 0, onSync, isAdminMode }) {
   const [currentIndex, setCurrentIndex] = useState(initialIndex);
   const [isRecording, setIsRecording] = useState(false);
   const [isInitializing, setIsInitializing] = useState(false);
@@ -423,37 +423,50 @@ function PronunciationTaskBase({ config, data, onUpdate, annotations, initialInd
           {renderTaskContent()}
 
           <div className="recording-controls mb-4">
-            {!isRecording && !isInitializing && !currentAnnotation.recording && (
-              <Button
-                variant="primary"
-                onClick={startRecording}
-                disabled={isUploading}
-              >
-                Start Recording
-              </Button>
-            )}
-            {!isRecording && !isInitializing && currentAnnotation.recording && status !== 'recorded' && status !== 'complete' && (
-              <Button
-                variant="primary"
-                onClick={startRecording}
-                disabled={isUploading}
-              >
-                Re-Record
-              </Button>
-            )}
-            {isRecording && (
-              <Button
-                variant="danger"
-                onClick={stopRecording}
-                disabled={isUploading}
-              >
-                Stop Recording
-              </Button>
-            )}
-            {isInitializing && (
-              <Button variant="secondary" disabled>
-                Initializing...
-              </Button>
+            {isAdminMode ? (
+              currentAnnotation.recording ? (
+                <>
+                  <div className="mb-2 text-center text-muted">User Recording</div>
+                  <audio controls src={currentAnnotation.recording} className="w-100" />
+                </>
+              ) : (
+                <Alert variant="info">No recording available</Alert>
+              )
+            ) : (
+              <>
+                {!isRecording && !isInitializing && !currentAnnotation.recording && (
+                  <Button
+                    variant="primary"
+                    onClick={startRecording}
+                    disabled={isUploading}
+                  >
+                    Start Recording
+                  </Button>
+                )}
+                {!isRecording && !isInitializing && currentAnnotation.recording && status !== 'recorded' && status !== 'complete' && (
+                  <Button
+                    variant="primary"
+                    onClick={startRecording}
+                    disabled={isUploading}
+                  >
+                    Re-Record
+                  </Button>
+                )}
+                {isRecording && (
+                  <Button
+                    variant="danger"
+                    onClick={stopRecording}
+                    disabled={isUploading}
+                  >
+                    Stop Recording
+                  </Button>
+                )}
+                {isInitializing && (
+                  <Button variant="secondary" disabled>
+                    Initializing...
+                  </Button>
+                )}
+              </>
             )}
           </div>
 
@@ -464,7 +477,7 @@ function PronunciationTaskBase({ config, data, onUpdate, annotations, initialInd
             </div>
           )}
 
-          {playbackUrl && (
+          {!isAdminMode && playbackUrl && (
             <div className="playback-controls mb-4">
               <h6>Your Recording:</h6>
               <audio controls src={playbackUrl} className="w-100" />
