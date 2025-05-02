@@ -66,6 +66,11 @@ function WerewolfTask({ config, data, onUpdate, annotations, initialIndex = 0, o
     loadAudioUrl();
   }, [config, currentRow]);
 
+  // Sync currentIndex with initialIndex if it changes
+  useEffect(() => {
+    setCurrentIndex(initialIndex);
+  }, [initialIndex]);
+
   if (!currentRow) {
     return <h5>Loading task data...</h5>;
   }
@@ -74,6 +79,7 @@ function WerewolfTask({ config, data, onUpdate, annotations, initialIndex = 0, o
   const handleChoice = async (choice) => {
     const updatedAnnotation = {
       selected: choice,
+      status: 'selected',
       speakerMap,
       metadata: {
         ...metadata,
@@ -146,6 +152,28 @@ function WerewolfTask({ config, data, onUpdate, annotations, initialIndex = 0, o
     if (currentIndex > 0) {
       if (onSync) await onSync();
       setCurrentIndex(currentIndex - 1);
+    }
+  };
+
+  // Unified Next button handler
+  const handleNext = async () => {
+    if (currentAnnotation.status === 'selected') {
+      const updatedAnnotation = {
+        ...currentAnnotation,
+        status: 'complete',
+        metadata: {
+          ...currentAnnotation.metadata,
+          confirmedAt: Date.now()
+        }
+      };
+      await onUpdate(currentIndex, updatedAnnotation);
+      if (onSync) await onSync();
+      if (currentIndex < data.length - 1) {
+        setCurrentIndex(currentIndex + 1);
+      }
+    } else if (currentIndex < data.length - 1) {
+      setCurrentIndex(currentIndex + 1);
+      if (onSync) await onSync();
     }
   };
 
@@ -264,7 +292,7 @@ function WerewolfTask({ config, data, onUpdate, annotations, initialIndex = 0, o
           <span className="mx-3">
             {currentIndex + 1}/{data.length}
           </span>
-          <Button variant="secondary" onClick={goNext} disabled={currentIndex === data.length - 1}>
+          <Button variant="secondary" onClick={handleNext} disabled={currentIndex === data.length - 1}>
             Next
           </Button>
         </div>

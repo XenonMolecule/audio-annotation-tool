@@ -7,7 +7,7 @@ import { ref, uploadString } from 'firebase/storage';
 import { storage } from './firebase';
 
 import WerewolfTask from './WerewolfTask';
-import PronunciationTask from './PronunciationTask';
+import PronunciationTaskBase from './PronunciationTaskBase';
 import JeopardyTask from './JeopardyTask';
 import EmotionTask from './EmotionTask';
 
@@ -185,31 +185,24 @@ function AppContent({
   const findFirstUnannotatedIndex = useCallback((taskId) => {
     const taskData = datasets[taskId] || [];
     const taskAnnotations = annotations[taskId] || {};
-    
     // If no annotations exist, return 0
     if (Object.keys(taskAnnotations).length === 0) {
       return 0;
     }
-    
     for (let i = 0; i < taskData.length; i++) {
-      const annotation = taskAnnotations[i];
-      
+      // Defensive: handle string keys from localStorage
+      const annotation = taskAnnotations[i] || taskAnnotations[String(i)];
       if (!annotation) {
-        console.log('Found unannotated index:', { taskId, index: i });
         return i;
       }
-      
       // Check for task-specific completion
-      if (taskId === 'werewolf' && !annotation.selected) {
-        console.log('Found unannotated index:', { taskId, index: i });
+      if (taskId === 'werewolf' && (annotation.selected == null || annotation.status !== 'complete')) {
         return i;
       }
-      if (taskId === 'pronunciation' && !annotation.recording) {
-        console.log('Found unannotated index:', { taskId, index: i });
+      if ((taskId === 'pronunciation_oed' || taskId === 'pronunciation_echo') && annotation.status !== 'complete') {
         return i;
       }
       if (taskId === 'emotion' && !annotation.emotion) {
-        console.log('Found unannotated index:', { taskId, index: i });
         return i;
       }
       // For jeopardy, consider it annotated if it has a recording AND an answer
@@ -221,7 +214,6 @@ function AppContent({
         }
         // Consider it unannotated if it has no recording or is not complete/recorded
         if (!annotation.recording || (annotation.answer !== 'complete')) {
-          console.log('Found unannotated index:', { taskId, index: i });
           return i;
         }
       }
@@ -508,7 +500,7 @@ function AppContent({
       TaskComponent = WerewolfTask;
       break;
     case 'pronunciation':
-      TaskComponent = PronunciationTask;
+      TaskComponent = PronunciationTaskBase;
       break;
     case 'jeopardy':
       TaskComponent = JeopardyTask;

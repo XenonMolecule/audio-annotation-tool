@@ -26,17 +26,60 @@ tasks:
       - robber
       - troublemaker
 
-  - id: "pronunciation"
+  - id: "pronunciation_oed"
     type: "pronunciation"
-    description: "Record your pronunciation from spelling"
+    description: "Record your pronunciation from OED entry"
     data_file: "data/pronunciation.jsonl"
-    audio: true
+    instructions: |
+      **Pronunciation OED Instructions**
+      
+      Your task is to record your pronunciation of each word based on the OED (Oxford English Dictionary) entry.
+      The OED entry shows how the word is pronounced using a special spelling system that represents the sounds.
+      
+      1. Read the OED entry carefully to understand the correct pronunciation.
+      2. Click "Start Recording" to record your pronunciation of the word.
+      3. Click "Stop Recording" when you're done.
+      4. Listen to your recording to ensure your pronunciation is clear and accurate.
+      5. If needed, click "Re-Record" to try again.
+      6. Use the Previous/Next buttons to navigate between words.
+      
+      Focus on pronouncing the word exactly as indicated in the OED entry.
+    audio: false
     audio_path_prefix: "https://firebasestorage.googleapis.com/v0/b/hai-gcp-accents-dialects.appspot.com/o/audio%2Fpronunciation%2F"
     recording: true
+    showOED: true
+    showAudio: false
     display_fields:
       - filename
       - word
       - OED
+      - region
+
+  - id: "pronunciation_echo"
+    type: "pronunciation"
+    description: "Record your pronunciation from reference audio"
+    data_file: "data/pronunciation.jsonl"
+    instructions: |
+      **Pronunciation Echo Instructions**
+      
+      Your task is to record your pronunciation of each word by matching the reference audio.
+      
+      1. Click play to listen to the reference pronunciation.
+      2. Click "Start Recording" to record your pronunciation of the word.
+      3. Click "Stop Recording" when you're done.
+      4. Listen to your recording to ensure your pronunciation matches the reference.
+      5. If needed, click "Re-Record" to try again.
+      6. Use the Previous/Next buttons to navigate between words.
+      
+      Focus on matching the pronunciation in the reference audio as closely as possible.
+    audio: true
+    audio_path_prefix: "https://firebasestorage.googleapis.com/v0/b/hai-gcp-accents-dialects.appspot.com/o/audio%2Fpronunciation%2F"
+    recording: true
+    showOED: false
+    showAudio: true
+    display_fields:
+      - filename
+      - word
       - region
 
   - id: "jeopardy"

@@ -3,7 +3,7 @@ import { Card, Button, ProgressBar, ToastContainer, Toast, Alert } from 'react-b
 import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
 import { storage } from './firebase';
 
-function PronunciationTask({ config, data, onUpdate, annotations, initialIndex = 0, onSync }) {
+function PronunciationTaskBase({ config, data, onUpdate, annotations, initialIndex = 0, onSync }) {
   const [currentIndex, setCurrentIndex] = useState(initialIndex);
   const [isRecording, setIsRecording] = useState(false);
   const [isInitializing, setIsInitializing] = useState(false);
@@ -29,9 +29,9 @@ function PronunciationTask({ config, data, onUpdate, annotations, initialIndex =
   // Get existing annotation or initialize
   const currentAnnotation = useMemo(() => {
     const ann = annotations[currentIndex];
-    return ann || { recording: null, metadata: { timestamp: Date.now() } };
+    return ann || { recording: null, status: null, metadata: { timestamp: Date.now() } };
   }, [annotations, currentIndex]);
-  const { metadata } = currentAnnotation;
+  const { metadata, status } = currentAnnotation;
 
   // Load audio URL when current row changes
   useEffect(() => {
@@ -47,7 +47,7 @@ function PronunciationTask({ config, data, onUpdate, annotations, initialIndex =
       setAudioError(null);
       
       try {
-        const storageRef = ref(storage, `audio/${config.id}/${currentRow.filename}`);
+        const storageRef = ref(storage, `audio/pronunciation/${currentRow.filename}`);
         const url = await getDownloadURL(storageRef);
         setAudioUrl(url);
         setAudioError(null);
@@ -94,6 +94,11 @@ function PronunciationTask({ config, data, onUpdate, annotations, initialIndex =
     setPlaybackUrl(currentAnnotation.recording || null);
   }, [currentIndex, currentAnnotation]);
 
+  // Sync currentIndex with initialIndex if it changes
+  useEffect(() => {
+    setCurrentIndex(initialIndex);
+  }, [initialIndex]);
+
   if (!currentRow) {
     return <h5>Loading task data...</h5>;
   }
@@ -123,14 +128,6 @@ function PronunciationTask({ config, data, onUpdate, annotations, initialIndex =
                       !userAgent.includes('crios') &&
                       !userAgent.includes('edg');
       
-      console.log('Browser detection:', {
-        userAgent: navigator.userAgent,
-        isSafari: isSafari,
-        isEdge: userAgent.includes('edg'),
-        isFirefox: userAgent.includes('firefox'),
-        isChrome: userAgent.includes('chrome') && !userAgent.includes('edg')
-      });
-      
       if (isSafari) {
         console.log('Using Web Audio API for Safari');
         // Use Web Audio API for Safari
@@ -142,7 +139,6 @@ function PronunciationTask({ config, data, onUpdate, annotations, initialIndex =
         
         processor.onaudioprocess = (e) => {
           const inputData = e.inputBuffer.getChannelData(0);
-          // Check if we have actual audio data (not just silence)
           const hasAudio = inputData.some(sample => Math.abs(sample) > 0.01);
           if (hasAudio) {
             hasValidAudio = true;
@@ -153,7 +149,6 @@ function PronunciationTask({ config, data, onUpdate, annotations, initialIndex =
         source.connect(processor);
         processor.connect(audioContext.destination);
         
-        // Store the audio context and processor
         mediaRecorderRef.current = {
           context: audioContext,
           source: source,
@@ -173,7 +168,6 @@ function PronunciationTask({ config, data, onUpdate, annotations, initialIndex =
               return;
             }
             
-            // Convert Float32Array chunks to WAV
             const wavBlob = convertToWav(chunks, audioContext.sampleRate);
             const tempUrl = URL.createObjectURL(wavBlob);
             setPlaybackUrl(tempUrl);
@@ -181,12 +175,10 @@ function PronunciationTask({ config, data, onUpdate, annotations, initialIndex =
           }
         };
         
-        // Wait a bit longer to ensure recording is initialized
         await new Promise(resolve => setTimeout(resolve, 500));
         setIsInitializing(false);
         setIsRecording(true);
       } else {
-        // Use MediaRecorder for other browsers
         const options = {
           mimeType: 'audio/webm',
           audioBitsPerSecond: 128000
@@ -196,31 +188,22 @@ function PronunciationTask({ config, data, onUpdate, annotations, initialIndex =
           options.mimeType = 'audio/mp4';
         }
         
-        console.log('Using MIME type:', options.mimeType);
-        
         const recorder = new MediaRecorder(newStream, options);
         chunksRef.current = [];
         let hasValidAudio = false;
         
-        // Request data chunks more frequently (every 50ms)
         recorder.ondataavailable = e => {
-          console.log('Data available event:', e.data.size, 'bytes');
           if (e.data.size > 0) {
             chunksRef.current.push(e.data);
             hasValidAudio = true;
-          } else {
-            console.warn('Received empty data chunk');
           }
         };
 
         recorder.onstart = () => {
-          console.log('Recording started');
-          // Start requesting data chunks immediately
           recorder.requestData();
         };
 
         recorder.onstop = async () => {
-          console.log('Recording stopped, chunks:', chunksRef.current.length);
           const currentChunks = chunksRef.current;
           if (currentChunks.length === 0 || !hasValidAudio) {
             setToastMessage('No audio detected in recording');
@@ -237,74 +220,51 @@ function PronunciationTask({ config, data, onUpdate, annotations, initialIndex =
         };
 
         mediaRecorderRef.current = recorder;
-        
-        // Start recording and request data chunks every 50ms
         recorder.start(50);
-        
-        // Wait a bit longer to ensure recording is initialized
         await new Promise(resolve => setTimeout(resolve, 500));
         setIsInitializing(false);
         setIsRecording(true);
       }
     } catch (err) {
       console.error('Error in startRecording:', err);
-      setToastMessage('Cannot access microphone');
+      setToastMessage('Error accessing microphone');
       setToastVariant('danger');
       setShowToast(true);
       setIsInitializing(false);
     }
   };
 
-  // Helper function to convert Float32Array chunks to WAV
   const convertToWav = (chunks, sampleRate) => {
-    const numChannels = 1;
-    const format = 1; // PCM
-    const bitDepth = 16;
+    const buffer = new ArrayBuffer(44 + chunks.length * 2);
+    const view = new DataView(buffer);
     
-    // Calculate total length
-    let totalLength = 0;
-    for (const chunk of chunks) {
-      totalLength += chunk.length;
-    }
-    
-    // Create WAV header
-    const header = new ArrayBuffer(44);
-    const view = new DataView(header);
-    
-    // RIFF chunk descriptor
+    // Write WAV header
     writeString(view, 0, 'RIFF');
-    view.setUint32(4, 36 + totalLength * 2, true);
+    view.setUint32(4, 36 + chunks.length * 2, true);
     writeString(view, 8, 'WAVE');
-    
-    // fmt subchunk
     writeString(view, 12, 'fmt ');
     view.setUint32(16, 16, true);
-    view.setUint16(20, format, true);
-    view.setUint16(22, numChannels, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, 1, true);
     view.setUint32(24, sampleRate, true);
-    view.setUint32(28, sampleRate * numChannels * bitDepth / 8, true);
-    view.setUint16(32, numChannels * bitDepth / 8, true);
-    view.setUint16(34, bitDepth, true);
-    
-    // data subchunk
+    view.setUint32(28, sampleRate * 2, true);
+    view.setUint16(32, 2, true);
+    view.setUint16(34, 16, true);
     writeString(view, 36, 'data');
-    view.setUint32(40, totalLength * 2, true);
+    view.setUint32(40, chunks.length * 2, true);
     
-    // Combine header and data
-    const data = new Float32Array(totalLength);
-    let offset = 0;
-    for (const chunk of chunks) {
-      data.set(chunk, offset);
-      offset += chunk.length;
+    // Write audio data
+    let offset = 44;
+    for (let i = 0; i < chunks.length; i++) {
+      const chunk = chunks[i];
+      for (let j = 0; j < chunk.length; j++) {
+        const s = Math.max(-1, Math.min(1, chunk[j]));
+        view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+        offset += 2;
+      }
     }
     
-    const wav = new Int16Array(totalLength);
-    for (let i = 0; i < totalLength; i++) {
-      wav[i] = Math.max(-1, Math.min(1, data[i])) * 0x7FFF;
-    }
-    
-    const blob = new Blob([header, wav], { type: 'audio/wav' });
-    return blob;
+    return new Blob([buffer], { type: 'audio/wav' });
   };
 
   const writeString = (view, offset, string) => {
@@ -314,196 +274,238 @@ function PronunciationTask({ config, data, onUpdate, annotations, initialIndex =
   };
 
   const stopRecording = () => {
-    console.log('stopRecording called', { isRecording, hasMediaRecorder: !!mediaRecorderRef.current });
     if (mediaRecorderRef.current) {
-      if (mediaRecorderRef.current.stop) {
-        // For Safari Web Audio API
-        mediaRecorderRef.current.stop();
-      } else if (mediaRecorderRef.current.state === 'recording') {
-        // For MediaRecorder
-        mediaRecorderRef.current.requestData(); // Get final chunk
-        mediaRecorderRef.current.stop();
-      }
+      mediaRecorderRef.current.stop();
       setIsRecording(false);
     }
   };
 
   const uploadAudio = async (blob, rowIndex, rowMetadata) => {
-    setIsUploading(true);
-    setToastMessage('Uploading recording...');
-    setToastVariant('info');
-    setShowToast(true);
-
     try {
-      // Log storage configuration for debugging
-      console.log('Storage configuration:', {
-        bucket: storage.bucket,
-        app: storage.app.name,
-        projectId: storage.app.options.projectId
-      });
-
-      const userId = localStorage.getItem('annotationUserId') || (() => {
-        const id = crypto.randomUUID();
-        localStorage.setItem('annotationUserId', id);
-        return id;
-      })();
-
-      const filename = `pronunciation_${data[rowIndex].word}_${Date.now()}.wav`;
-      const storageRef = ref(storage, `recordings/${userId}/${filename}`);
+      setIsUploading(true);
+      setUploadProgress(0);
       
-      // Log the storage reference for debugging
-      console.log('Storage reference:', {
-        path: storageRef.fullPath,
-        bucket: storageRef.bucket
-      });
-
-      const task = uploadBytesResumable(storageRef, blob);
-
-      task.on('state_changed',
-        snap => {
-          const progress = (snap.bytesTransferred / snap.totalBytes) * 100;
+      const timestamp = Date.now();
+      const filename = `${currentRow.filename}_${timestamp}.wav`;
+      const storageRef = ref(storage, `recordings/${config.id}/${filename}`);
+      
+      const uploadTask = uploadBytesResumable(storageRef, blob);
+      
+      uploadTask.on('state_changed',
+        (snapshot) => {
+          const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
           setUploadProgress(progress);
         },
-        err => {
-          console.error('Upload error:', err);
-          setToastMessage(`Upload failed: ${err.message}`);
+        (error) => {
+          console.error('Upload error:', error);
+          setToastMessage('Error uploading recording');
           setToastVariant('danger');
           setShowToast(true);
           setIsUploading(false);
         },
         async () => {
-          try {
-            const url = await getDownloadURL(task.snapshot.ref);
-            await onUpdate(rowIndex, { recording: url, metadata: { ...rowMetadata, timestamp: Date.now() } });
-            setPlaybackUrl(url);
-            setToastMessage('Recording saved');
-            setToastVariant('success');
-            setShowToast(true);
-          } catch (err) {
-            console.error('Error getting download URL:', err);
-            setToastMessage(`Error saving recording: ${err.message}`);
-            setToastVariant('danger');
-            setShowToast(true);
-          } finally {
-            setIsUploading(false);
-          }
+          const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
+          const newAnnotation = {
+            recording: downloadURL,
+            status: 'recorded',
+            metadata: {
+              ...rowMetadata,
+              timestamp: timestamp,
+              filename: filename
+            }
+          };
+          onUpdate(rowIndex, newAnnotation);
+          setToastMessage('Recording uploaded successfully');
+          setToastVariant('success');
+          setShowToast(true);
+          setIsUploading(false);
         }
       );
-    } catch (err) {
-      console.error('Error in uploadAudio:', err);
-      setToastMessage(`Upload failed: ${err.message}`);
+    } catch (error) {
+      console.error('Error in uploadAudio:', error);
+      setToastMessage('Error uploading recording');
       setToastVariant('danger');
       setShowToast(true);
       setIsUploading(false);
     }
   };
 
+  // Confirm and move to next item
+  const confirmAndNext = async () => {
+    const newAnnotation = {
+      ...currentAnnotation,
+      status: 'complete',
+      metadata: {
+        ...currentAnnotation.metadata,
+        confirmedAt: Date.now()
+      }
+    };
+    await onUpdate(currentIndex, newAnnotation);
+    if (currentIndex < data.length - 1) {
+      setCurrentIndex(currentIndex + 1);
+      if (onSync) {
+        await onSync(currentIndex + 1);
+      }
+    }
+  };
+
+  // Unified Next button handler
+  const handleNext = async () => {
+    if (status === 'recorded') {
+      await confirmAndNext();
+    } else if (currentIndex < data.length - 1) {
+      setCurrentIndex(currentIndex + 1);
+      if (onSync) {
+        await onSync(currentIndex + 1);
+      }
+    }
+  };
+
   const goPrev = async () => {
     if (currentIndex > 0) {
       setCurrentIndex(currentIndex - 1);
+      if (onSync) {
+        await onSync(currentIndex - 1);
+      }
     }
   };
 
-  const goNext = async () => {
-    if (currentIndex < data.length - 1) {
-      setCurrentIndex(currentIndex + 1);
-    }
-  };
-
-  return (
-    <Card className="mb-3">
-      <Card.Header>
-        <h5>Pronunciation Task - Row {currentIndex + 1} of {data.length}</h5>
-      </Card.Header>
-      <Card.Body>
-        <p className="text-muted mb-3">{config.description}</p>
-
-        {/* Word and OED information */}
-        <div className="mb-3">
-          <h6>Word to Pronounce:</h6>
-          <p className="lead">{currentRow.word}</p>
-          {currentRow.OED && (
-            <div className="mb-2">
-              <h6>OED Entry:</h6>
-              <p>{currentRow.OED}</p>
-            </div>
-          )}
-          {currentRow.region && (
-            <div className="mb-2">
-              <h6>Region:</h6>
-              <p>{currentRow.region}</p>
-            </div>
-          )}
-        </div>
-
-        {/* Reference audio */}
-        {config.audio && currentRow?.filename && (
-          <div className="mb-3">
-            <p><strong>Reference Audio:</strong></p>
+  const renderTaskContent = () => {
+    return (
+      <div className="mb-4">
+        <h5>Word: {currentRow.word}</h5>
+        <div className="mb-2"><strong>Region:</strong> {currentRow.region}</div>
+        {config.showOED && (
+          <div className="oed-entry">
+            <h6>OED Entry:</h6>
+            <pre>{currentRow.OED}</pre>
+          </div>
+        )}
+        {config.showAudio && (
+          <div className="reference-audio">
+            <h6>Reference Audio:</h6>
             {isLoadingAudio ? (
-              <div className="text-muted">Loading audio...</div>
+              <p>Loading reference audio...</p>
             ) : audioError ? (
-              <Alert variant="warning">{audioError}</Alert>
+              <Alert variant="danger">{audioError}</Alert>
             ) : audioUrl ? (
-              <audio controls style={{ width: '100%' }}>
-                <source src={audioUrl} type="audio/wav" />
-                Your browser does not support audio.
-              </audio>
+              <audio controls src={audioUrl} className="w-100" />
             ) : null}
           </div>
         )}
+      </div>
+    );
+  };
 
-        {/* Recording controls */}
-        {config.recording && (
-          <div className="mb-3">
-            {isInitializing ? (
-              <Button variant="secondary" disabled style={{ minWidth: 160 }}>
-                <span className="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
-                Initializing…
-              </Button>
-            ) : (
+  return (
+    <div className="pronunciation-task">
+      <ToastContainer position="top-end" className="p-3">
+        <Toast show={showToast} onClose={() => setShowToast(false)} delay={3000} autohide>
+          <Toast.Header>
+            <strong className="me-auto">Notification</strong>
+          </Toast.Header>
+          <Toast.Body className={toastVariant === 'danger' ? 'text-danger' : ''}>
+            {toastMessage}
+          </Toast.Body>
+        </Toast>
+      </ToastContainer>
+
+      <Card className="mb-4">
+        <Card.Header>
+          <h4>Pronunciation Task ({config.showOED ? 'OED' : 'Echo'} Version) - Row {currentIndex + 1} of {data.length}</h4>
+          <p className="mb-0">
+            {config.showOED 
+              ? 'Please pronounce the word based on the OED entry.'
+              : 'Please listen to the reference audio and repeat the pronunciation.'}
+          </p>
+        </Card.Header>
+        <Card.Body>
+          {renderTaskContent()}
+
+          <div className="recording-controls mb-4">
+            {!isRecording && !isInitializing && !currentAnnotation.recording && (
               <Button
-                variant={isRecording ? 'danger' : 'primary'}
-                onClick={isRecording ? stopRecording : startRecording}
+                variant="primary"
+                onClick={startRecording}
                 disabled={isUploading}
-                style={{ minWidth: 160 }}
               >
-                {isRecording ? 'Stop Recording' : (playbackUrl ? 'Re-record Audio' : 'Start Recording')}
+                Start Recording
               </Button>
             )}
-
-            {isUploading && (
-              <div className="mt-2">
-                <ProgressBar now={uploadProgress} label={`${Math.round(uploadProgress)}%`} />
-              </div>
+            {!isRecording && !isInitializing && currentAnnotation.recording && status !== 'recorded' && status !== 'complete' && (
+              <Button
+                variant="primary"
+                onClick={startRecording}
+                disabled={isUploading}
+              >
+                Re-Record
+              </Button>
             )}
-
-            {playbackUrl && !isUploading && (
-              <div className="mt-2">
-                <p><strong>Your Recording:</strong></p>
-                <audio controls src={playbackUrl} style={{ width: '100%' }} />
-              </div>
+            {isRecording && (
+              <Button
+                variant="danger"
+                onClick={stopRecording}
+                disabled={isUploading}
+              >
+                Stop Recording
+              </Button>
+            )}
+            {isInitializing && (
+              <Button variant="secondary" disabled>
+                Initializing...
+              </Button>
             )}
           </div>
-        )}
 
-        {/* Navigation */}
-        <div className="d-flex justify-content-center mt-4">
-          <Button variant="secondary" onClick={goPrev} disabled={currentIndex === 0}>Previous</Button>
-          <span className="mx-3">{currentIndex + 1}/{data.length}</span>
-          <Button variant="secondary" onClick={goNext} disabled={currentIndex === data.length - 1}>Next</Button>
-        </div>
+          {isUploading && (
+            <div className="mb-4">
+              <ProgressBar now={uploadProgress} label={`${Math.round(uploadProgress)}%`} />
+              <p className="text-center mt-2">Uploading recording...</p>
+            </div>
+          )}
 
-        {/* Toasts */}
-        <ToastContainer position="top-end" className="p-3">
-          <Toast show={showToast} onClose={() => setShowToast(false)} delay={3000} autohide bg={toastVariant}>
-            <Toast.Header><strong className="me-auto">Notification</strong></Toast.Header>
-            <Toast.Body>{toastMessage}</Toast.Body>
-          </Toast>
-        </ToastContainer>
-      </Card.Body>
-    </Card>
+          {playbackUrl && (
+            <div className="playback-controls mb-4">
+              <h6>Your Recording:</h6>
+              <audio controls src={playbackUrl} className="w-100" />
+              {/* Only show Re-Record if a recording exists */}
+              {currentAnnotation.recording && (
+                <div className="d-flex justify-content-center mt-3">
+                  <Button
+                    variant="warning"
+                    onClick={startRecording}
+                  >
+                    Re-Record
+                  </Button>
+                </div>
+              )}
+            </div>
+          )}
+        </Card.Body>
+        <Card.Footer>
+          <div className="d-flex justify-content-center align-items-center">
+            <Button
+              variant="secondary"
+              onClick={goPrev}
+              disabled={currentIndex === 0}
+            >
+              Previous
+            </Button>
+            <span className="mx-3">
+              {currentIndex + 1}/{data.length}
+            </span>
+            <Button
+              variant="secondary"
+              onClick={handleNext}
+              disabled={currentIndex === data.length - 1}
+            >
+              Next
+            </Button>
+          </div>
+        </Card.Footer>
+      </Card>
+    </div>
   );
 }
 
-export default PronunciationTask;
+export default PronunciationTaskBase; 
