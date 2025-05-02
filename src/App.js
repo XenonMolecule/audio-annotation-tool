@@ -202,7 +202,7 @@ function AppContent({
       if ((taskId === 'pronunciation_oed' || taskId === 'pronunciation_echo') && annotation.status !== 'complete') {
         return i;
       }
-      if (taskId === 'emotion' && !annotation.emotion) {
+      if (taskId === 'emotion' && annotation.status !== 'complete') {
         return i;
       }
       // For jeopardy, consider it annotated if it has a recording AND an answer
@@ -368,8 +368,11 @@ function AppContent({
         // Check if there's an active question (has questionStartTime but no buzzTime)
         const questionStartTime = jeopardyTask.querySelector('audio')?.dataset.questionStartTime;
         const buzzed = jeopardyTask.querySelector('.buzz-button')?.dataset.buzzed === 'true';
-        
-        if (questionStartTime && !buzzed) {
+        // Get the current annotation for the active Jeopardy question
+        const currentJeopardyAnnotation = (annotations[activeTask.id] || {})[initialTaskIndices[activeTask.id]] || {};
+        // Only show warning if not already complete, forfeited, or recorded
+        const isComplete = ["complete", "forfeited", "recorded"].includes(currentJeopardyAnnotation.answer);
+        if (questionStartTime && !buzzed && !isComplete) {
           // Store the pending navigation
           setPendingNavigation({ taskId, index });
           // Show the custom warning modal

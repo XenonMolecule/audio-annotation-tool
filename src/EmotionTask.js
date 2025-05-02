@@ -1,7 +1,8 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { Card, Button, Alert } from 'react-bootstrap';
 import { ref, getDownloadURL } from 'firebase/storage';
 import { storage } from './firebase';
+import AudioRecorder from './components/AudioRecorder';
 
 function EmotionTask({ config, data, onUpdate, annotations, initialIndex = 0, onSync }) {
   const [currentIndex, setCurrentIndex] = useState(initialIndex);
@@ -19,17 +20,24 @@ function EmotionTask({ config, data, onUpdate, annotations, initialIndex = 0, on
   const currentAnnotation = useMemo(() => {
     const annotation = annotations[currentIndex];
     if (annotation) return annotation;
-    
     // If nothing found, return empty annotation with metadata
     return {
-      emotion: null,
+      recording: null,
+      status: null,
       metadata: {
         timestamp: Date.now()
       }
     };
   }, [annotations, currentIndex]);
 
-  const { emotion: selectedEmotion, metadata } = currentAnnotation;
+  const { recording, status, metadata } = currentAnnotation;
+  const [playbackUrl, setPlaybackUrl] = useState(currentAnnotation.recording || null);
+  const audioRecorderRef = useRef(null);
+
+  // Reset local state and load persisted recording when row changes
+  useEffect(() => {
+    setPlaybackUrl(currentAnnotation.recording || null);
+  }, [currentIndex, currentAnnotation]);
 
   // Load audio URL when current row changes
   useEffect(() => {
@@ -64,30 +72,96 @@ function EmotionTask({ config, data, onUpdate, annotations, initialIndex = 0, on
     loadAudioUrl();
   }, [config, currentRow]);
 
+  // Sync currentIndex with initialIndex prop changes
+  useEffect(() => {
+    setCurrentIndex(initialIndex);
+  }, [initialIndex]);
+
   if (!currentRow) {
     return <h5>Loading task data...</h5>;
   }
 
   const choices = Array.isArray(currentRow[config.choice_field]) ? currentRow[config.choice_field] : [];
 
-  // Handle emotion selection
-  const handleEmotionSelect = async (newEmotion) => {
+  // Handle recording complete
+  const handleRecordingComplete = async (recordingUrl) => {
+    setPlaybackUrl(recordingUrl);
     const updatedAnnotation = {
-      emotion: newEmotion,
+      recording: recordingUrl,
+      status: 'recorded',
       metadata: {
         ...metadata,
         timestamp: Date.now()
       }
     };
-    onUpdate(currentIndex, updatedAnnotation);
+    await onUpdate(currentIndex, updatedAnnotation);
     if (onSync) await onSync();
+  };
+
+  // Render AudioRecorder or playback UI
+  const renderAudioSection = () => {
+    if (!playbackUrl) {
+      return (
+        <div className="mb-4">
+          <AudioRecorder
+            ref={audioRecorderRef}
+            onRecordingComplete={handleRecordingComplete}
+            allowReRecording={true}
+            initialDelay={500}
+          />
+        </div>
+      );
+    } else {
+      return (
+        <div className="playback-controls mb-4">
+          <h6>Your Recording:</h6>
+          <audio controls src={playbackUrl} className="w-100" />
+          <div className="d-flex justify-content-center mt-3">
+            <Button
+              variant="warning"
+              onClick={() => {
+                setPlaybackUrl(null);
+                if (audioRecorderRef.current && audioRecorderRef.current.resetRecording) {
+                  audioRecorderRef.current.resetRecording();
+                }
+                // Immediately start recording again
+                setTimeout(() => {
+                  if (audioRecorderRef.current && audioRecorderRef.current.startRecording) {
+                    audioRecorderRef.current.startRecording();
+                  }
+                }, 0);
+              }}
+            >
+              Re-Record
+            </Button>
+          </div>
+        </div>
+      );
+    }
   };
 
   // Handle next/previous navigation
   const goNext = async () => {
-    if (currentIndex < data.length - 1) {
+    if (status === 'recorded') {
+      // Mark as complete and advance to next item (if not at end)
+      const updatedAnnotation = {
+        ...currentAnnotation,
+        status: 'complete',
+        metadata: {
+          ...metadata,
+          confirmedAt: Date.now()
+        }
+      };
+      await onUpdate(currentIndex, updatedAnnotation);
       if (onSync) await onSync();
+      if (currentIndex < data.length - 1) {
+        setCurrentIndex(currentIndex + 1);
+      }
+      return;
+    }
+    if (currentIndex < data.length - 1) {
       setCurrentIndex(currentIndex + 1);
+      if (onSync) await onSync();
     }
   };
 
@@ -105,10 +179,10 @@ function EmotionTask({ config, data, onUpdate, annotations, initialIndex = 0, on
           Emotion Task - Row {currentIndex + 1} of {data.length}
         </h5>
       </Card.Header>
-
       <Card.Body>
-        <p className="text-muted mb-3">{config.description}</p>
-
+        <p className="mb-3 text-muted">
+          Listen to the audio and read the sentence. Then record yourself responding in a way that matches the emotional context of the original utterance. You can re-record if needed.
+        </p>
         {/* Audio player */}
         {config.audio && currentRow?.filename && (
           <div className="mb-3">
@@ -124,34 +198,18 @@ function EmotionTask({ config, data, onUpdate, annotations, initialIndex = 0, on
             ) : null}
           </div>
         )}
-
         <div className="mb-3">
           <strong>Sentence:</strong> {currentRow.sentence}
         </div>
-
-        {/* Horizontal choices */}
-        <p>Select an emotion:</p>
-        <div className="d-flex flex-wrap">
-          {choices.map(choice => (
-            <Button
-              key={choice}
-              variant={selectedEmotion === choice ? 'primary' : 'outline-primary'}
-              onClick={() => handleEmotionSelect(choice)}
-              className="mr-2 mb-2"
-            >
-              {choice}
-            </Button>
-          ))}
-        </div>
-        {selectedEmotion && (
-          <p className="mt-2">
-            <strong>Your choice:</strong> {selectedEmotion}
-          </p>
-        )}
-
-        {/* Centered pagination */}
-        <div className="d-flex justify-content-center align-items-center mt-4">
-          <Button variant="secondary" onClick={goPrev} disabled={currentIndex === 0}>
+        {renderAudioSection()}
+      </Card.Body>
+      <Card.Footer>
+        <div className="d-flex justify-content-center align-items-center">
+          <Button
+            variant="secondary"
+            onClick={goPrev}
+            disabled={currentIndex === 0}
+          >
             Previous
           </Button>
           <span className="mx-3">
@@ -165,7 +223,7 @@ function EmotionTask({ config, data, onUpdate, annotations, initialIndex = 0, on
             Next
           </Button>
         </div>
-      </Card.Body>
+      </Card.Footer>
     </Card>
   );
 }

@@ -106,8 +106,20 @@ tasks:
 
   - id: "emotion"
     type: "emotion"
-    description: "Annotate speaker emotion"
+    description: "Respond to speaker with emotional awareness"
     data_file: "data/emotion.jsonl"
+    instructions: |
+      **Emotion Response Instructions**
+
+      Your task is to listen to the audio and then record yourself responding to the speaker in an emotionally aware way.
+
+      1. Click play to listen to the original utterance and read the sentence.
+      2. Imagine you are responding to the speaker in a natural conversation.
+      3. Record your response, making sure to match the emotional context of the original utterance (e.g., if the speaker sounds sad, respond with empathy; if surprised, respond with surprise, etc.).
+      4. You can listen to your recording and re-record if needed.
+      5. Use the Previous/Next buttons to navigate between items.
+
+      Focus on making your response feel natural and emotionally appropriate for the situation.
     audio: true
     audio_path_prefix: "https://firebasestorage.googleapis.com/v0/b/hai-gcp-accents-dialects.appspot.com/o/audio%2Femotion%2F"
     display_fields:
