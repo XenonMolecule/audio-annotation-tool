@@ -13,6 +13,7 @@ function JeopardyTask({ config, data, onUpdate, annotations, initialIndex = 0, o
   const [audioUrl, setAudioUrl] = useState(null);
   const [audioError, setAudioError] = useState(null);
   const [isLoadingAudio, setIsLoadingAudio] = useState(false);
+  const [isPageLoaded, setIsPageLoaded] = useState(false);
   const [timer, setTimer] = useState(0);
   const [isTimerRunning, setIsTimerRunning] = useState(false);
   const [hasReportedIssue, setHasReportedIssue] = useState(false);
@@ -100,36 +101,76 @@ function JeopardyTask({ config, data, onUpdate, annotations, initialIndex = 0, o
 
   // Load audio URL when current row changes
   useEffect(() => {
+    const currentAudioRef = audioRef.current;
+    let isMounted = true;
+
     const loadAudioUrl = async () => {
-      if (!config.audio || !currentRow?.filename) {
-        setAudioUrl(null);
-        setAudioError(null);
-        setIsLoadingAudio(false);
+      // Double check we have all required data
+      if (!config?.audio || !currentRow?.filename || !config?.id) {
+        if (isMounted) {
+          setAudioUrl(null);
+          setAudioError(null);
+          setIsLoadingAudio(false);
+        }
         return;
       }
 
-      setIsLoadingAudio(true);
-      setAudioError(null);
+      if (isMounted) {
+        setIsLoadingAudio(true);
+        setAudioError(null);
+      }
       
       try {
+        // Verify the filename is valid before attempting to load
+        if (!currentRow.filename.match(/\.(wav|mp3)$/i)) {
+          throw new Error('Invalid audio filename');
+        }
+
         const storageRef = ref(storage, `audio/${config.id}/${currentRow.filename}`);
         const url = await getDownloadURL(storageRef);
-        setAudioUrl(url);
-        setAudioError(null);
+        
+        // Verify the URL is valid before setting it
+        if (!url || typeof url !== 'string' || !url.startsWith('http')) {
+          throw new Error('Invalid audio URL');
+        }
+
+        if (isMounted) {
+          setAudioUrl(url);
+          setAudioError(null);
+          setIsLoadingAudio(false);
+        }
       } catch (error) {
         console.error('Error loading audio URL:', error);
-        setAudioUrl(null);
-        if (error.code === 'storage/object-not-found') {
-          setAudioError('Audio not available');
-        } else {
-          setAudioError('Error loading audio');
+        if (isMounted) {
+          setAudioUrl(null);
+          if (error.code === 'storage/object-not-found') {
+            setAudioError('Audio not available');
+          } else {
+            setAudioError('Error loading audio');
+          }
+          setIsLoadingAudio(false);
         }
-      } finally {
-        setIsLoadingAudio(false);
       }
     };
+
+    // Reset audio state when row changes
+    setAudioUrl(null);
+    setAudioError(null);
+    setIsLoadingAudio(false);
+    if (currentAudioRef) {
+      currentAudioRef.pause();
+    }
+
     loadAudioUrl();
-  }, [config, currentRow]);
+
+    // Cleanup function
+    return () => {
+      isMounted = false;
+      if (currentAudioRef) {
+        currentAudioRef.pause();
+      }
+    };
+  }, [config, currentRow, currentIndex]);
 
   // Timer effect
   useEffect(() => {
@@ -144,7 +185,33 @@ function JeopardyTask({ config, data, onUpdate, annotations, initialIndex = 0, o
   }, [isTimerRunning]);
 
   const handleAudioPlay = () => {
-    if (!questionStartTime) {
+    if (!audioUrl || isLoadingAudio || !audioRef.current) {
+      return;
+    }
+
+    // Double check the audio source matches our current URL
+    if (audioRef.current.src !== audioUrl) {
+      audioRef.current.src = audioUrl;
+      audioRef.current.load();
+    }
+
+    // If audio isn't ready, wait for it to load
+    if (audioRef.current.readyState < 2) { // 2 = HAVE_CURRENT_DATA
+      audioRef.current.load();
+      audioRef.current.oncanplay = () => {
+        // Start timer for unanswered questions
+        if (!questionStartTime && !currentAnnotation.answer) {
+          setQuestionStartTime(Date.now());
+          setIsTimerRunning(true);
+        }
+        setAudioStarted(true);
+        audioRef.current.play();
+      };
+      return;
+    }
+
+    // Start timer for unanswered questions
+    if (!questionStartTime && !currentAnnotation.answer) {
       setQuestionStartTime(Date.now());
       setIsTimerRunning(true);
     }
@@ -249,18 +316,38 @@ function JeopardyTask({ config, data, onUpdate, annotations, initialIndex = 0, o
 
   // Enhanced navigation prevention and task switching detection
   useEffect(() => {
-    let isUnmounting = false;
+    let isInitialMount = true;
 
     const handleBeforeUnload = (e) => {
       if (questionStartTime && !buzzed) {
-        e.preventDefault();
-        // Note: Modern browsers may ignore this custom message and show their own generic message,
-        // but we'll provide a detailed one for browsers that do show it
-        e.returnValue = '⚠️ FORFEIT WARNING: You are in the middle of a Jeopardy question! Leaving now will count as a forfeit and you cannot attempt this question again. Click "Stay" to continue or "Leave" to forfeit.';
+        // Automatically forfeit on refresh
+        const forfeitedAnnotation = {
+          buzzTime: null,
+          buzzLatency: -1,
+          recording: null,
+          originalRecording: null,
+          reRecordingCount: 0,
+          audioLength: null,
+          answer: 'forfeited',
+          metadata: {
+            ...metadata,
+            timestamp: Date.now(),
+            forfeitReason: 'page_refresh'
+          }
+        };
+        onUpdate(currentIndex, forfeitedAnnotation);
+        if (onSync) onSync();
       }
     };
 
     const handleVisibilityChange = () => {
+      // Skip visibility checks during initial mount
+      if (isInitialMount) {
+        isInitialMount = false;
+        return;
+      }
+
+      // Only trigger forfeit if the page has been hidden for more than 5 seconds
       if (document.hidden && questionStartTime && !buzzed) {
         // User switched tabs or minimized window
         const forfeitedAnnotation = {
@@ -282,50 +369,14 @@ function JeopardyTask({ config, data, onUpdate, annotations, initialIndex = 0, o
       }
     };
 
-    // Handle task switching and page refreshes
-    const handleForfeit = (reason) => {
-      if (questionStartTime && !buzzed && !isUnmounting) {
-        const forfeitedAnnotation = {
-          buzzTime: null,
-          buzzLatency: -1,
-          recording: null,
-          originalRecording: null,
-          reRecordingCount: 0,
-          audioLength: null,
-          answer: 'forfeited',
-          metadata: {
-            ...metadata,
-            timestamp: Date.now(),
-            forfeitReason: reason
-          }
-        };
-        onUpdate(currentIndex, forfeitedAnnotation);
-        if (onSync) onSync();
-      }
-    };
-
     // Set up event listeners
     window.addEventListener('beforeunload', handleBeforeUnload);
     document.addEventListener('visibilitychange', handleVisibilityChange);
 
-    // Handle task switching by checking if we're still mounted
-    const checkMountStatus = () => {
-      if (questionStartTime && !buzzed) {
-        handleForfeit('task_switch');
-      }
-    };
-
-    // Check mount status periodically
-    const mountCheckInterval = setInterval(checkMountStatus, 1000);
-
     // Cleanup function
     return () => {
-      isUnmounting = true;
       window.removeEventListener('beforeunload', handleBeforeUnload);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
-      clearInterval(mountCheckInterval);
-      // Handle cleanup forfeit
-      handleForfeit('component_unmount');
     };
   }, [questionStartTime, buzzed, currentIndex, metadata, onUpdate, onSync]);
 
@@ -452,6 +503,15 @@ function JeopardyTask({ config, data, onUpdate, annotations, initialIndex = 0, o
     console.log('=== goPrev END ===');
   };
 
+  // Add page load delay
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setIsPageLoaded(true);
+    }, 1000); // 1 second delay
+
+    return () => clearTimeout(timer);
+  }, []);
+
   if (!currentRow) {
     return <h5>Loading task data...</h5>;
   }
@@ -472,11 +532,17 @@ function JeopardyTask({ config, data, onUpdate, annotations, initialIndex = 0, o
 
         {/* Timer display */}
         <div className="mb-3">
-          <h4>Time: {(timer / 1000).toFixed(1)}s</h4>
+          {currentAnnotation.answer === 'forfeited' ? (
+            <h4>Buzz Time: N/A</h4>
+          ) : currentAnnotation.answer ? (
+            <h4>Buzz Time: {currentAnnotation.buzzLatency ? `${(currentAnnotation.buzzLatency / 1000).toFixed(1)}s` : 'N/A'}</h4>
+          ) : (
+            <h4>Time: {(timer / 1000).toFixed(1)}s</h4>
+          )}
         </div>
 
         {/* Audio player */}
-        {config.audio && currentRow?.filename && (
+        {isPageLoaded && config.audio && currentRow?.filename && (
           <div className="mb-3">
             {isLoadingAudio ? (
               <div className="text-muted">Loading audio...</div>
@@ -486,7 +552,7 @@ function JeopardyTask({ config, data, onUpdate, annotations, initialIndex = 0, o
               <audio 
                 ref={audioRef}
                 controls 
-                key={currentRow.filename} 
+                key={`${currentRow.filename}-${currentIndex}`}
                 style={{ width: '100%' }}
                 onPlay={handleAudioPlay}
                 onPause={handleAudioPause}

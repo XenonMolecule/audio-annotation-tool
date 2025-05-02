@@ -213,9 +213,17 @@ function AppContent({
         return i;
       }
       // For jeopardy, consider it annotated if it has a recording AND an answer
-      if (taskId === 'jeopardy' && (!annotation.recording || (annotation.answer !== 'complete' && annotation.answer !== 'forfeited'))) {
-        console.log('Found unannotated index:', { taskId, index: i });
-        return i;
+      // Skip forfeited questions by checking for 'forfeited' answer
+      if (taskId === 'jeopardy') {
+        // Skip forfeited questions
+        if (annotation.answer === 'forfeited') {
+          continue;
+        }
+        // Consider it unannotated if it has no recording or is not complete/recorded
+        if (!annotation.recording || (annotation.answer !== 'complete')) {
+          console.log('Found unannotated index:', { taskId, index: i });
+          return i;
+        }
       }
     }
     return taskData.length - 1; // Return last index if all are annotated
